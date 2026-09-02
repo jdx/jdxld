@@ -72,7 +72,7 @@ commit_parsers = [
   { message = "^port", group = "<!-- 08 -->🕹️ Porting (other)" },
   { message = "^style", group = "<!-- 09 -->🎨 Styling" },
   { message = "^packaging", group = "<!-- 10 -->📦 Packaging" },
-  { message = "^libwild", group = "<!-- 10 -->🏛️ Libwild" },
+  { message = "^libjdxld", group = "<!-- 10 -->🏛️ Libjdxld" },
   { message = "^tools", group = "<!-- 11 -->🛠️ Dev tooling" },
   { message = "^linker-diff", group = "<!-- 12 -->⚖️ Linker Diff" },
   { message = "^test|^ci", group = "<!-- 13 -->🧪 Testing" },

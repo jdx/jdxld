@@ -1,6 +1,6 @@
 [package]
 name = "benchmark-runner"
-description = "Runs benchmarks for the Wild linker"
+description = "Runs benchmarks for the jdxld linker"
 version = "0.1.0"
 edition = "2024"
 license.workspace = true

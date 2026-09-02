@@ -1,4 +1,4 @@
-# Contributing to wild
+# Contributing to jdxld
 
 If you'd like to help out, we'd love to hear from you. It's a good idea to reach out first to avoid
 duplication of effort. Also, it'll make it possible for us to provide hints that might make what
@@ -6,7 +6,7 @@ you're trying to do easier.
 
 ## LLM / AI use policy
 
-It's OK to use an LLM or AI to help with your work on the Wild linker. However, there must be a
+It's OK to use an LLM or AI to help with your work on the jdxld linker. However, there must be a
 human in the loop. We want to communicate with you, not a bot. Please do not use an AI agent to
 communicate with us and don't just copy and paste AI-written responses to review comments. If your
 English isn't good, it's fine to use automatic translation, however please let us know that you're
@@ -38,19 +38,14 @@ guidelines](https://forge.rust-lang.org/how-to-start-contributing.html#etiquette
 
 ## Options for communicating
 
-Feel free to start a [discussion](https://github.com/wild-linker/wild/discussions), open an [issue](https://github.com/wild-linker/wild/issues), or start a thread on our [Zulip](https://wild.zulipchat.com/).
+Feel free to start a [discussion](https://github.com/jdx/jdxld/discussions) or open an
+[issue](https://github.com/jdx/jdxld/issues).
 
 You're also welcome to reach out directly to the [maintainers](GOVERNANCE.md#maintainers).
 
-## Meetings
-
-We try to have about one video call per month. To add this to your calendar, join the
-[wild-dev-meetings](https://groups.google.com/g/wild-dev-meetings) google group. If this doesn't
-work for some reason, come and talk to us on Zulip and we'll try to find another way to add you.
-
 ## Ways you can contribute
 
-* Use `wild` and let us know your experiences, or file issues for problems found.
+* Use `jdxld` and let us know your experiences, or file issues for problems found.
 * Open an issue or a discussion here on GitHub.
 * Sending a PR related to some issue
 
@@ -71,7 +66,7 @@ then use `cargo test` as usual.
 
 ## Running tests for other architectures on x86_64
 
-Wild supports testing on non-native architectures using QEMU.
+jdxld supports testing on non-native architectures using QEMU.
 
 > **Note:** Ubuntu 26.04 is recommended for cross-architecture testing.
 
@@ -117,19 +112,19 @@ To run tests for a specific architecture:
 
 ```sh
 # For aarch64
-WILD_TEST_CROSS=aarch64 cargo test
+JDXLD_TEST_CROSS=aarch64 cargo test
 
 # For riscv64
-WILD_TEST_CROSS=riscv64 cargo test
+JDXLD_TEST_CROSS=riscv64 cargo test
 
 # For loongarch64
-WILD_TEST_CROSS=loongarch64 cargo test
+JDXLD_TEST_CROSS=loongarch64 cargo test
 
 # For ppc64le
-WILD_TEST_CROSS=ppc64le cargo test
+JDXLD_TEST_CROSS=ppc64le cargo test
 
 # All
-WILD_TEST_CROSS=all cargo test
+JDXLD_TEST_CROSS=all cargo test
 ```
 
 This runs both native tests and architecture-specific tests. QEMU is used for executing binaries for non-native, while linking and diffing are performed natively. Note that cross-compilation only works with GCC and rustc tests; clang-based tests currently disable cross-compilation.
@@ -142,7 +137,7 @@ Currently, the behavior for the following test options can be configured using t
   code. The default value is "default", which means no explicit toolchain is specified.
 
 - `qemu_arch`: List of additional architectures (different from the host) to run tests for. This
-  setting is overridden by the `$WILD_TEST_CROSS` environment variable. The default value is
+  setting is overridden by the `$JDXLD_TEST_CROSS` environment variable. The default value is
   `[]`.
 
 - `allow_rust_musl_target`: Specifies whether to allow the musl target Rust. The default value is
@@ -151,15 +146,15 @@ Currently, the behavior for the following test options can be configured using t
 - `diff_ignore`: Adds extra rules to ignore certain diffs. This can be useful if you're developing
   on a system with an older version of GNU ld that doesn't perform certain optimisations.
 
-- `run_all_diffs`: Enables diffing the output of wild against that of the existing linkers.
+- `run_all_diffs`: Enables diffing the output of jdxld against that of the existing linkers.
   By default, diffs are skipped. Set to `true` to enable.
 
-A sample configuration file is provided as `test-config.toml.sample`. By default, Wild uses
+A sample configuration file is provided as `test-config.toml.sample`. By default, jdxld uses
 `test-config.toml` as the configuration file. If you have written your configuration in a different
-file, specify its location using the `WILD_TEST_CONFIG` environment variable as follows:
+file, specify its location using the `JDXLD_TEST_CONFIG` environment variable as follows:
 
 ```sh
-WILD_TEST_CONFIG=path_to_config cargo test
+JDXLD_TEST_CONFIG=path_to_config cargo test
 ```
 
 ## Coding style for tests
@@ -167,18 +162,18 @@ WILD_TEST_CONFIG=path_to_config cargo test
 C and C++ files follow Google style from clang-format that is enforced by an unit test. You can use the following command to format them:
 
 ```sh
-clang-format -i wild/tests/sources/*.{c,cc,h}
+clang-format -i jdxld/tests/sources/*.{c,cc,h}
 ```
 
 Newer versions of clang-format might produce slightly different formatting.
 If your code is correctly formatted locally but the CI job still reports formatting errors, update your clang-format to either the latest version or the version used in the failing CI job (the CI output prints its version on failure).
 In general, formatting generated by newer versions should be accepted by older versions, but this isn’t guaranteed.
 
-When working on tests, you can temporarily disable the formatting check by setting the `WILD_TEST_IGNORE_FORMAT` environment variable.
+When working on tests, you can temporarily disable the formatting check by setting the `JDXLD_TEST_IGNORE_FORMAT` environment variable.
 
 ## Running external tests
 
-Wild can run some external test suites. Currently only the test suite of mold is supported.
+jdxld can run some external test suites. Currently only the test suite of mold is supported.
 
 You can run the mold tests as follows:
 
@@ -199,16 +194,16 @@ cargo test --features external_tests
 
 Some tests are configured to be skipped by default. A list of these skipped tests can be found at:
 
-[wild/tests/external_tests/mold_skip_tests.toml](./wild/tests/external_tests/mold_skip_tests.toml): for the mold tests.
+[jdxld/tests/external_tests/mold_skip_tests.toml](./jdxld/tests/external_tests/mold_skip_tests.toml): for the mold tests.
 
 However, you can also run the tests without skipping any of them:
 
 ```sh
 # Run mold tests without skipping any test
-WILD_IGNORE_SKIP=mold cargo test --features mold_tests
+JDXLD_IGNORE_SKIP=mold cargo test --features mold_tests
 
 # Run all external tests without skipping any test
-WILD_IGNORE_SKIP=all cargo test --features external_tests
+JDXLD_IGNORE_SKIP=all cargo test --features external_tests
 ```
 
 The LLD tests (`cargo test --features lld_tests`) require llvm-tools. e.g. `llvm-21-tools` and
@@ -221,15 +216,15 @@ llvm_tools_dir = "/usr/lib/llvm-21/bin"
 
 ### Running external tests with other linkers
 
-When debugging a failing test, it can be useful to see how other linkers (such as GNU ld or lld) behave on the same test. You can use the `WILD_EXTERNAL_LINKER` environment variable to run test scripts with a different linker:
+When debugging a failing test, it can be useful to see how other linkers (such as GNU ld or lld) behave on the same test. You can use the `JDXLD_EXTERNAL_LINKER` environment variable to run test scripts with a different linker:
 
 ```sh
-WILD_EXTERNAL_LINKER=ld cargo test --features mold_tests discard.sh
+JDXLD_EXTERNAL_LINKER=ld cargo test --features mold_tests discard.sh
 
-WILD_EXTERNAL_LINKER=lld cargo test --features mold_tests allow-multiple-definition.sh
+JDXLD_EXTERNAL_LINKER=lld cargo test --features mold_tests allow-multiple-definition.sh
 ```
 
-The skip list is still applied, so `expect_failure` tests work as usual. This is useful for determining whether a test that fails with wild also fails with another linker, or whether the failure is specific to wild.
+The skip list is still applied, so `expect_failure` tests work as usual. This is useful for determining whether a test that fails with jdxld also fails with another linker, or whether the failure is specific to jdxld.
 
 When using a third-party linker, the path to the temporary directory is printed to stderr, so you can inspect the output files (e.g. under `/tmp/foo/out/test/`).
 
@@ -309,7 +304,7 @@ inconsistent internal state (a bug), returns an error rather than panicking. The
 not to avoid the panic per se, but rather because by returning an error, we can attach more
 contextual information to the error to help diagnose the problem. For example, we can add
 information about what symbol we were processing and which input file we were looking at. This is
-usually more useful for us than a stack trace showing where it was in the code. Also, since Wild is
+usually more useful for us than a stack trace showing where it was in the code. Also, since jdxld is
 very multi-threaded, if there's a bug that causes all the threads to panic, the output can get
 pretty messed up.
 
@@ -319,23 +314,23 @@ why it happened, then switching to returning an error is recommended.
 
 ### Logging
 
-Wild uses tracing for logging. To see trace output, run with `WILD_LOG=trace`. You can also filter
-by module. e.g. `WILD_LOG=libwild::grouping`.
+jdxld uses tracing for logging. To see trace output, run with `JDXLD_LOG=trace`. You can also filter
+by module. e.g. `JDXLD_LOG=libjdxld::grouping`.
 
-## Building wild with wild
+## Building jdxld with jdxld
 
-You can add or modify a `.cargo/config.toml` file to change the linker used to build `wild` to be `wild`!
+You can add or modify a `.cargo/config.toml` file to change the linker used to build `jdxld` to be `jdxld`!
 
 The below example has entries for `musl` and `gnu` ABI targets:
 
 ```toml
 [target.x86_64-unknown-linux-musl]
 linker = "/usr/bin/clang"
-rustflags = ["-C", "relocation-model=static", "-C", "link-arg=--ld-path=wild"]
+rustflags = ["-C", "relocation-model=static", "-C", "link-arg=--ld-path=jdxld"]
 
 [target.x86_64-unknown-linux-gnu]
 linker = "/usr/bin/clang"
-rustflags = ["-C", "link-arg=--ld-path=wild"]
+rustflags = ["-C", "link-arg=--ld-path=jdxld"]
 ```
 
 The `.cargo/config.toml` file can be added in the root folder of the project, or somewhere else according to the
@@ -359,7 +354,7 @@ linkers need to do.
     their name, common symbols aren't commonly used. They are however used in libc, so are necessary
     if you want to be able to link pretty much anything.
   * Everything else with the [linker tag](https://maskray.me/blog/tags/linker/)
-* For Wild specific content, there's [David Lattimore's](https://davidlattimore.github.io/) blog.
+* For jdxld specific content, there's [David Lattimore's](https://davidlattimore.github.io/) blog.
 * There are also various specification documents. These may not be the best to read start-to-finish,
   but can be good when you need some specific details on something.
   * [ELF-64 Object File Format](https://uclibc.org/docs/elf-64-gen.pdf)
@@ -379,7 +374,7 @@ linkers need to do.
   an update in a while, feel free to politely ask if they're still working on it and mention that if
   they're not, you'd like to have a go.
 * We may on occasion tag issues as [good first
-  issue](https://github.com/wild-linker/wild/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22).
+  issue](https://github.com/jdx/jdxld/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22).
   One person's good-first-issue might be too hard or too easy for another person, so this is a
   somewhat hard judgement to make.
 * You're welcome to help out with other unassigned issues too, even if they don't have tags. If

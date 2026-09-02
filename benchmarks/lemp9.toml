@@ -1,7 +1,7 @@
 name = "lemp9"
 
 [bench.chrome]
-min_wild_version = "0.6.0"
+min_jdxld_version = "0.6.0"
 
 [bench.librustc-driver]
 
@@ -11,4 +11,4 @@ min_wild_version = "0.6.0"
 
 [bench.rust-analyzer]
 
-[bench.wild]
+[bench.jdxld]

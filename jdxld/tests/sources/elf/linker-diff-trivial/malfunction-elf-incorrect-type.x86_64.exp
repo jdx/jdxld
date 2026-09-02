@@ -1,0 +1,6 @@
+jdxld: elf/x86_64/linker-diff-trivial/malfunction-elf-incorrect-type/linker-diff-trivial.c.jdxld
+ld: elf/x86_64/linker-diff-trivial/malfunction-elf-incorrect-type/linker-diff-trivial.c.ld
+file-header.type
+jdxld 0x4
+ld 0x2
+

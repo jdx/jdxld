@@ -121,14 +121,14 @@ fn read_gnu_version(bin: &crate::Binary) -> Result<FieldValues> {
         let version_index = version_index_raw.index();
         let hidden = version_index_raw.is_hidden();
 
-        // TODO: Currently Wild doesn't differentiate between local and global symbols.
+        // TODO: Currently jdxld doesn't differentiate between local and global symbols.
         let version_name = if version_index.is_special() {
             b"local or global"
         } else {
             versions.version(version_index)?.unwrap().name()
         };
 
-        // GNU ld creates an empty symbol for each version, Wild doesn't, so we skip it.
+        // GNU ld creates an empty symbol for each version, jdxld doesn't, so we skip it.
         if dynsym.elf_symbol().st_type() == elf::STT_OBJECT
             && dynsym.elf_symbol().is_absolute(e)
             && sym_name == version_name

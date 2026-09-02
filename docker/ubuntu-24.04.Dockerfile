@@ -1,8 +1,8 @@
 # Run on Ubuntu 24.04. We can't just apt install rustup here, so this is a bit different to later
 # versions of ubuntu.
 
-# docker build --progress=plain -t wild-dev-ubuntu-24-04 . -f docker/ubuntu-24.04.Dockerfile
-# docker run -it wild-dev-ubuntu-24-04
+# docker build --progress=plain -t jdxld-dev-ubuntu-24-04 . -f docker/ubuntu-24.04.Dockerfile
+# docker run -it jdxld-dev-ubuntu-24-04
 
 FROM ubuntu:24.04 AS chef
 RUN apt-get update && \
@@ -41,13 +41,13 @@ RUN rustup toolchain install nightly \
         --component rustc-codegen-cranelift-preview
 
 RUN cargo install --locked cargo-chef
-WORKDIR /wild
+WORKDIR /jdxld
 
 FROM chef AS planner
 COPY . .
 RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
-COPY --from=planner /wild/recipe.json recipe.json
+COPY --from=planner /jdxld/recipe.json recipe.json
 RUN cargo chef cook --all-targets --recipe-path recipe.json
 COPY . .

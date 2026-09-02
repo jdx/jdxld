@@ -1,4 +1,4 @@
-# Releasing wild
+# Releasing jdxld
 
 * Manually trigger the release workflow to verify that it still works.
 * Run `git cliff {previous version}...`
@@ -18,12 +18,12 @@ git push origin refs/tags/0.6.0
 ```
 
 That should trigger the `release.yml` workflow in GitHub. You can follow its progress in the
-[Actions tab](https://github.com/wild-linker/wild/actions) in GitHub.
+[Actions tab](https://github.com/jdx/jdxld/actions) in GitHub.
 
-When complete, it should create the release in [Releases](https://github.com/wild-linker/wild/releases).
+When complete, it should create the release in [Releases](https://github.com/jdx/jdxld/releases).
 
 Maintainers can then edit the release notes associated with the release.
 
 If everything looks good, publish the release.
 
-Update [wild-action](https://github.com/wild-linker/action).
+Update release integrations once jdxld publishes supported packages.

@@ -1,7 +1,7 @@
 # Run on a recent version of Debian
 #
-# docker build --progress=plain -t wild-dev-debian . -f docker/debian.Dockerfile
-# docker run -it wild-dev-debian
+# docker build --progress=plain -t jdxld-dev-debian . -f docker/debian.Dockerfile
+# docker run -it jdxld-dev-debian
 
 FROM rust:1.97.1 AS chef
 RUN apt-get update && \
@@ -26,13 +26,13 @@ RUN rustup toolchain install nightly && \
         aarch64-unknown-linux-musl \
         && \
     rustup component add rustc-codegen-cranelift-preview --toolchain nightly
-WORKDIR /wild
+WORKDIR /jdxld
 
 FROM chef AS planner
 COPY . .
 RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
-COPY --from=planner /wild/recipe.json recipe.json
+COPY --from=planner /jdxld/recipe.json recipe.json
 RUN cargo chef cook --all-targets --recipe-path recipe.json
 COPY . .

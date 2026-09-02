@@ -25,7 +25,7 @@ jobs:
       - name: Install Nix
         uses: nixbuild/nix-quick-install-action@v35
 
-      - name: Build Wild
+      - name: Build jdxld
         run: |
           nix build -L --show-trace
 

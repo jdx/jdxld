@@ -747,6 +747,39 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92ecc6618181def0457392ccd0ee51198e065e016d1d527a7ac1b6dc7c1f09d2"
 
 [[package]]
+name = "jdxld"
+version = "0.10.0"
+dependencies = [
+ "ar",
+ "bitflags",
+ "blake3",
+ "dhat",
+ "diff",
+ "foldhash 0.2.0",
+ "gimli 0.34.0",
+ "hex",
+ "itertools 0.15.0",
+ "libjdxld",
+ "libloading",
+ "libtest-mimic",
+ "linker-diff",
+ "linker-layout",
+ "mimalloc",
+ "object 0.40.0",
+ "os_info",
+ "rand",
+ "regex",
+ "serde",
+ "serde-keyvalue",
+ "strum",
+ "tempfile",
+ "toml",
+ "wait-timeout",
+ "wasmparser 0.258.0",
+ "which",
+]
+
+[[package]]
 name = "jobserver"
 version = "0.1.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -791,38 +824,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
 
 [[package]]
-name = "libloading"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "754ca22de805bb5744484a5b151a9e1a8e837d5dc232c2d7d8c2e3492edc8b60"
-dependencies = [
- "cfg-if",
- "windows-link",
-]
-
-[[package]]
-name = "libmimalloc-sys"
-version = "0.1.49"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6a45a52f43e1c16f667ccfe4dd8c85b7f7c204fd5e3bf46c5b0db9a5c3c0b8e9"
-dependencies = [
- "cc",
-]
-
-[[package]]
-name = "libtest-mimic"
-version = "0.8.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "14e6ba06f0ade6e504aff834d7c34298e5155c6baca353cc6a4aaff2f9fd7f33"
-dependencies = [
- "anstream 1.0.0",
- "anstyle",
- "clap",
- "escape8259",
-]
-
-[[package]]
-name = "libwild"
+name = "libjdxld"
 version = "0.10.0"
 dependencies = [
  "anyhow",
@@ -880,6 +882,37 @@ dependencies = [
  "zerocopy",
  "zlib-rs",
  "zstd",
+]
+
+[[package]]
+name = "libloading"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "754ca22de805bb5744484a5b151a9e1a8e837d5dc232c2d7d8c2e3492edc8b60"
+dependencies = [
+ "cfg-if",
+ "windows-link",
+]
+
+[[package]]
+name = "libmimalloc-sys"
+version = "0.1.49"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a45a52f43e1c16f667ccfe4dd8c85b7f7c204fd5e3bf46c5b0db9a5c3c0b8e9"
+dependencies = [
+ "cc",
+]
+
+[[package]]
+name = "libtest-mimic"
+version = "0.8.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "14e6ba06f0ade6e504aff834d7c34298e5155c6baca353cc6a4aaff2f9fd7f33"
+dependencies = [
+ "anstream 1.0.0",
+ "anstyle",
+ "clap",
+ "escape8259",
 ]
 
 [[package]]
@@ -2143,39 +2176,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f3ef584124b911bcc3875c2f1472e80f24361ceb789bd1c62b3e9a3df9ff43c"
 dependencies = [
  "libc",
-]
-
-[[package]]
-name = "wild-linker"
-version = "0.10.0"
-dependencies = [
- "ar",
- "bitflags",
- "blake3",
- "dhat",
- "diff",
- "foldhash 0.2.0",
- "gimli 0.34.0",
- "hex",
- "itertools 0.15.0",
- "libloading",
- "libtest-mimic",
- "libwild",
- "linker-diff",
- "linker-layout",
- "mimalloc",
- "object 0.40.0",
- "os_info",
- "rand",
- "regex",
- "serde",
- "serde-keyvalue",
- "strum",
- "tempfile",
- "toml",
- "wait-timeout",
- "wasmparser 0.258.0",
- "which",
 ]
 
 [[package]]

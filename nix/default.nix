@@ -14,7 +14,7 @@
   stdenv,
 }:
 assert lib.assertMsg (lib.versionAtLeast rustc.version "1.97.1")
-  "Wild requires at least Rust 1.97.1, this instance of nixpkgs has Rust ${rustc.version}";
+  "jdxld requires at least Rust 1.97.1, this instance of nixpkgs has Rust ${rustc.version}";
 
 let
   cargoToml = builtins.fromTOML (builtins.readFile ../Cargo.toml);
@@ -42,7 +42,7 @@ let
   );
 
   commonArgs = {
-    pname = "wild";
+    pname = "jdxld";
     inherit (cargoToml.workspace.package) version;
 
     strictDeps = true;
@@ -58,7 +58,7 @@ craneLib.buildPackage (
   commonArgs
   // {
     cargoArtifacts = craneLib.buildDepsOnly commonArgs;
-    cargoBuildCommand = "cargo build --profile release -p wild-linker";
+    cargoBuildCommand = "cargo build --profile release -p jdxld";
 
     # Do the check in the separate derivation so it can be done
     # in parallel in the dev profile
@@ -81,21 +81,21 @@ craneLib.buildPackage (
       stdenv.cc.cc.lib
     ];
 
-    # Do the install check instead just as a smoke-tests that Wild
+    # Do the install check instead just as a smoke-tests that jdxld
     # built correctly.
     doInstallCheck = true;
     nativeInstallCheckInputs = [ versionCheckHook ];
     versionCheckProgramArg = "--version";
 
     meta = {
-      changelog = "https://github.com/wild-linker/wild/blob/${commonArgs.version}/CHANGELOG.md";
+      changelog = "https://github.com/jdx/jdxld/blob/${commonArgs.version}/CHANGELOG.md";
       description = "A very fast linker for Linux";
-      homepage = "https://github.com/wild-linker/wild";
+      homepage = "https://github.com/jdx/jdxld";
       license = [
         lib.licenses.asl20 # or
         lib.licenses.mit
       ];
-      mainProgram = "wild";
+      mainProgram = "jdxld";
       platforms = lib.platforms.linux;
     };
   }

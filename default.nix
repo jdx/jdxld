@@ -10,5 +10,6 @@ let
   craneLib = import craneSrc { pkgs = final; };
 in
 {
-  wild-unwrapped = final.callPackage ./nix { inherit craneLib; };
+  jdxld-unwrapped = final.callPackage ./nix { inherit craneLib; };
+  jdxld = final.jdxld-unwrapped;
 }

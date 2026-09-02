@@ -1,6 +1,6 @@
 # Linker Script Support
 
-This page documents which linker script features Wild supports, which are partially implemented,
+This page documents which linker script features jdxld supports, which are partially implemented,
 and which are planned for the future. Each feature is marked with one of four statuses: `✅`
 (supported), `🧪` (partial), `📅` (planned), or `❌` (not planned). A dedicated section at the
 end lists the features required to link the Linux kernel.
@@ -92,7 +92,7 @@ end lists the features required to link the Linux kernel.
 
 ## MEMORY Command
 
-The `MEMORY` command defines named memory regions with an origin address and a length. Wild parses
+The `MEMORY` command defines named memory regions with an origin address and a length. jdxld parses
 `MEMORY` blocks including the `ORIGIN`/`org`/`o` and `LENGTH`/`len`/`l` attribute keywords and
 their expressions. Attribute flags such as `(rwx)` are not yet parsed. Placement directives that
 assign an output section to a named region (`>region`, `AT>region`) are not yet implemented.
@@ -111,8 +111,8 @@ assign an output section to a named region (`>region`, `AT>region`) are not yet 
 
 The Linux kernel's build system uses a rich set of linker script features across `vmlinux.lds` and
 related architecture-specific scripts. Several of these features are not yet fully supported by
-Wild. The table below lists each such feature along with its current status, so contributors can
-see at a glance what remains before Wild can link the kernel.
+jdxld. The table below lists each such feature along with its current status, so contributors can
+see at a glance what remains before jdxld can link the kernel.
 
 | Feature | Status | Notes |
 |---------|--------|-------|

@@ -1,6 +1,6 @@
 [package]
 name = "linker-utils"
-description = "Code shared by libwild and linker-diff"
+description = "Code shared by libjdxld and linker-diff"
 version.workspace = true
 license.workspace = true
 repository.workspace = true
