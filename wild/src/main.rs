@@ -6,6 +6,9 @@ static MIMALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 #[global_allocator]
 static ALLOC: dhat::Alloc = dhat::Alloc;
 
+#[cfg(unix)]
+mod incremental;
+
 fn main() {
     if let Err(error) = run() {
         libwild::error::report_error_and_exit(&error)
@@ -20,6 +23,19 @@ fn run() -> libwild::error::Result {
     let _profiler = dhat::Profiler::new_heap();
 
     libwild::init_timing()?;
+
+    #[cfg(unix)]
+    if incremental::handle_internal_daemon_command()? {
+        return Ok(());
+    }
+
+    #[cfg(unix)]
+    if std::env::var("WILD_INCREMENTAL").is_ok_and(|value| value == "1") {
+        let args = std::env::args().collect::<Vec<_>>();
+        if incremental::should_use_daemon(&args) {
+            return incremental::run_via_daemon(args);
+        }
+    }
 
     let mut args = libwild::Args::new(std::env::args)?;
     args.set_version(VERSION);

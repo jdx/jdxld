@@ -8,6 +8,7 @@ use crate::error::Result;
 #[cfg(not(target_family = "wasm"))]
 use memmap2::Mmap;
 use memmap2::MmapOptions;
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::ErrorKind;
 use std::io::Write as _;
@@ -15,6 +16,7 @@ use std::ops::Deref;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Mutex;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileReplacementMode {
@@ -312,6 +314,153 @@ impl OsFileSystem {
     #[must_use]
     pub const fn new() -> Self {
         Self
+    }
+}
+
+/// A host filesystem that keeps unchanged linker inputs mapped between links.
+///
+/// This is intended for persistent linker processes. Each returned input records the identity of
+/// the file at the point where it was opened, so the usual end-of-link mutation check is retained.
+#[derive(Debug, Default, Clone)]
+pub struct CachingFileSystem {
+    inputs: Arc<Mutex<HashMap<PathBuf, CachedInput>>>,
+}
+
+#[derive(Debug, Clone)]
+struct CachedInput {
+    bytes: Arc<OsInputBytes>,
+    file: Arc<File>,
+    modification_time: std::time::SystemTime,
+    len: u64,
+}
+
+#[derive(Debug)]
+pub struct CachedInputFile {
+    input: CachedInput,
+    path: PathBuf,
+}
+
+impl InputFileData for CachedInputFile {
+    fn bytes(&self) -> &[u8] {
+        &self.input.bytes
+    }
+
+    fn verify_unchanged(&self) -> std::io::Result<bool> {
+        let metadata = std::fs::metadata(&self.path)?;
+        Ok(
+            metadata.modified()? == self.input.modification_time
+                && metadata.len() == self.input.len,
+        )
+    }
+}
+
+impl CachingFileSystem {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Drops cached mappings for inputs that no longer exist or have changed.
+    pub fn prune(&self) {
+        self.inputs.lock().unwrap().retain(|path, input| {
+            std::fs::metadata(path).is_ok_and(|metadata| {
+                metadata.modified().is_ok_and(|modified| {
+                    modified == input.modification_time && metadata.len() == input.len
+                })
+            })
+        });
+    }
+}
+
+impl FileSystem for CachingFileSystem {
+    type Input = CachedInputFile;
+    type Output = OsOutputFile;
+
+    fn open_input(
+        &self,
+        path: &Path,
+        prepopulate_maps: bool,
+    ) -> Result<(Self::Input, Option<Arc<File>>)> {
+        let cache_key = std::path::absolute(path)?;
+        let metadata = std::fs::metadata(&cache_key)
+            .with_context(|| format!("Failed to read metadata for `{}`", path.display()))?;
+        let modification_time = metadata.modified().with_context(|| {
+            format!("Failed to read file modification time `{}`", path.display())
+        })?;
+        let len = metadata.len();
+
+        let mut inputs = self.inputs.lock().unwrap();
+        let cached = inputs
+            .get(&cache_key)
+            .filter(|input| input.modification_time == modification_time && input.len == len);
+        let input = if let Some(cached) = cached {
+            cached.clone()
+        } else {
+            let file = Arc::new(
+                File::open(&cache_key)
+                    .with_context(|| format!("Failed to open input file `{}`", path.display()))?,
+            );
+
+            #[cfg(not(target_family = "wasm"))]
+            let bytes = {
+                let mut mmap_options = MmapOptions::new();
+                if prepopulate_maps {
+                    mmap_options.populate();
+                }
+                let mmap = unsafe { mmap_options.map(file.as_ref()) }
+                    .with_context(|| format!("Failed to mmap input file `{}`", path.display()))?;
+                Arc::new(OsInputBytes(mmap))
+            };
+
+            #[cfg(target_family = "wasm")]
+            let bytes = {
+                use std::io::Read as _;
+                let mut bytes = Vec::new();
+                file.as_ref().read_to_end(&mut bytes)?;
+                Arc::new(OsInputBytes(bytes))
+            };
+
+            let input = CachedInput {
+                bytes,
+                file,
+                modification_time,
+                len,
+            };
+            inputs.insert(cache_key.clone(), input.clone());
+            input
+        };
+
+        Ok((
+            CachedInputFile {
+                input: input.clone(),
+                path: cache_key,
+            },
+            Some(input.file),
+        ))
+    }
+
+    fn file_type(&self, path: &Path) -> Result<FileType> {
+        OsFileSystem.file_type(path)
+    }
+
+    fn canonicalize(&self, path: &Path) -> Result<PathBuf> {
+        OsFileSystem.canonicalize(path)
+    }
+
+    fn remove_file(&self, path: &Path) -> Result<()> {
+        OsFileSystem.remove_file(path)
+    }
+
+    fn rename_file(&self, path: &Path, new_path: &Path) -> Result<()> {
+        OsFileSystem.rename_file(path, new_path)
+    }
+
+    fn create_output(&self, path: Arc<Path>, options: OutputOptions) -> Result<Self::Output> {
+        OsFileSystem.create_output(path, options)
+    }
+
+    fn write_auxiliary(&self, path: &Path, bytes: &[u8]) -> Result {
+        OsFileSystem.write_auxiliary(path, bytes)
     }
 }
 
@@ -646,6 +795,28 @@ fn advise_huge_pages_if_requested(_mmap: &memmap2::MmapMut, requested: bool) -> 
         return Err(crate::error!("MADV_HUGEPAGE is only supported on Linux"));
     }
     Ok(())
+}
+
+#[cfg(all(test, not(target_family = "wasm")))]
+mod caching_tests {
+    use super::*;
+
+    #[test]
+    fn reuses_unchanged_input_and_reloads_changed_input() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("input.o");
+        std::fs::write(&path, b"first").unwrap();
+        let file_system = CachingFileSystem::new();
+
+        let (first, _) = file_system.open_input(&path, false).unwrap();
+        let (second, _) = file_system.open_input(&path, false).unwrap();
+        assert!(Arc::ptr_eq(&first.input.bytes, &second.input.bytes));
+
+        std::fs::write(&path, b"second version").unwrap();
+        let (third, _) = file_system.open_input(&path, false).unwrap();
+        assert!(!Arc::ptr_eq(&first.input.bytes, &third.input.bytes));
+        assert_eq!(third.bytes(), b"second version");
+    }
 }
 
 struct OutputFileDefaults {

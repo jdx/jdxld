@@ -136,6 +136,20 @@ rustflags = [
 If you'd like to use Wild as your linker for Rust code in CI, see
 [wild-action](https://github.com/wild-linker/action).
 
+## Experimental persistent linking
+
+On Unix, setting `WILD_INCREMENTAL=1` keeps a linker process alive for five minutes and reuses
+memory mappings for input files whose modification time and size have not changed:
+
+```sh
+WILD_INCREMENTAL=1 RUSTFLAGS="-Clinker=clang -Clink-arg=--ld-path=wild" cargo build
+```
+
+This is an early building block for incremental linking, not section-level incremental linking.
+Symbol resolution, layout, relocation and output writing still run in full for every link. Requests
+are currently processed serially, and per-invocation linker environment variables are not yet
+forwarded to an already-running process.
+
 ## Q&A
 
 ### Why another linker?
