@@ -132,7 +132,7 @@ fn handle_request(stream: &mut UnixStream, file_system: &CachingFileSystem) {
         args.set_version(super::VERSION);
         args.on_warning(Box::new(move |warning| {
             use std::fmt::Write as _;
-            let _ = writeln!(warning_output.lock().unwrap(), "jdxld: warning: {warning}");
+            let _ = writeln!(warning_output.lock().unwrap(), "{warning}");
         }));
         args.parse(get_arguments)?;
         libjdxld::run_with_file_system(args, file_system.clone())

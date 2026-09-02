@@ -331,7 +331,6 @@ pub struct CachingFileSystem {
 #[derive(Debug, Clone)]
 struct CachedInput {
     bytes: Arc<OsInputBytes>,
-    file: Arc<File>,
     modification_time: std::time::SystemTime,
     len: u64,
 }
@@ -395,8 +394,12 @@ impl FileSystem for CachingFileSystem {
         let cached = inputs
             .get(&cache_key)
             .filter(|input| input.modification_time == modification_time && input.len == len);
-        let input = if let Some(cached) = cached {
-            cached.clone()
+        let (input, file) = if let Some(cached) = cached {
+            let file = Arc::new(
+                File::open(&cache_key)
+                    .with_context(|| format!("Failed to open input file `{}`", path.display()))?,
+            );
+            (cached.clone(), file)
         } else {
             let file = Arc::new(
                 File::open(&cache_key)
@@ -424,20 +427,19 @@ impl FileSystem for CachingFileSystem {
 
             let input = CachedInput {
                 bytes,
-                file,
                 modification_time,
                 len,
             };
             inputs.insert(cache_key.clone(), input.clone());
-            input
+            (input, file)
         };
 
         Ok((
             CachedInputFile {
-                input: input.clone(),
+                input,
                 path: cache_key,
             },
-            Some(input.file),
+            Some(file),
         ))
     }
 
