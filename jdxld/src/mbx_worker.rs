@@ -46,10 +46,11 @@ pub(crate) fn handle_internal_worker_command() -> Result<bool> {
         .next()
         .and_then(|arg| arg.to_str().and_then(|arg| arg.parse::<u32>().ok()))
         .context("missing or invalid mr-boxington parent PID")?;
+    let state_root = args.next().map(PathBuf::from);
     if args.next().is_some() {
         return Err(libjdxld::error!("unexpected mr-boxington worker argument"));
     }
-    serve(&socket, parent_pid)?;
+    serve(&socket, parent_pid, state_root.as_deref())?;
     Ok(true)
 }
 
@@ -92,7 +93,7 @@ pub(crate) fn run_via_worker(socket: &Path, args: Vec<String>) -> Result {
     }
 }
 
-fn serve(socket: &Path, parent_pid: u32) -> Result {
+fn serve(socket: &Path, parent_pid: u32, state_root: Option<&Path>) -> Result {
     if socket.exists() {
         std::fs::remove_file(socket)
             .with_context(|| format!("failed to remove stale socket `{}`", socket.display()))?;
@@ -107,7 +108,7 @@ fn serve(socket: &Path, parent_pid: u32) -> Result {
     loop {
         match listener.accept() {
             Ok((mut stream, _)) => {
-                handle_request(&mut stream, &file_system);
+                handle_request(&mut stream, &file_system, state_root);
                 file_system.prune();
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -121,12 +122,18 @@ fn serve(socket: &Path, parent_pid: u32) -> Result {
     }
 }
 
-fn handle_request(stream: &mut UnixStream, file_system: &CachingFileSystem) {
+fn handle_request(
+    stream: &mut UnixStream,
+    file_system: &CachingFileSystem,
+    state_root: Option<&Path>,
+) {
     let warnings = Arc::new(Mutex::new(String::new()));
     let warning_output = Arc::clone(&warnings);
+    let state_warning_output = Arc::clone(&warnings);
     let result = read_request(stream).and_then(|(cwd, arguments)| {
         std::env::set_current_dir(&cwd)
             .with_context(|| format!("failed to change directory to `{}`", cwd.display()))?;
+        file_system.start_recording();
         let get_arguments = || arguments.iter().map(String::as_str);
         let mut args = libjdxld::Args::new(get_arguments)?;
         args.set_version(super::VERSION);
@@ -135,7 +142,23 @@ fn handle_request(stream: &mut UnixStream, file_system: &CachingFileSystem) {
             let _ = writeln!(warning_output.lock().unwrap(), "{warning}");
         }));
         args.parse(get_arguments)?;
-        libjdxld::run_with_file_system(args, file_system.clone())
+        libjdxld::run_with_file_system(args, file_system.clone())?;
+        if let Some(state_root) = state_root
+            && let Err(error) = crate::persistent_state::record(
+                state_root,
+                &cwd,
+                &arguments,
+                super::VERSION,
+                file_system.recorded_inputs(),
+            )
+        {
+            use std::fmt::Write as _;
+            let _ = writeln!(
+                state_warning_output.lock().unwrap(),
+                "jdxld: warning: persistent link state was not recorded: {error:?}"
+            );
+        }
+        Ok(())
     });
 
     let warnings = warnings.lock().unwrap();

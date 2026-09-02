@@ -18,8 +18,11 @@ path = "tests/integration_tests.rs"
 harness = false
 
 [dependencies]
+blake3.workspace = true
 libjdxld = { path = "../libjdxld", version = "0.10.0", default-features = false }
 libc.workspace = true
+postcard.workspace = true
+serde.workspace = true
 
 # This is off by default, since it doesn't appear to help. However, if you're linking against musl
 # libc, which has a comparatively slow allocator, then enabling this does help. To enable this,

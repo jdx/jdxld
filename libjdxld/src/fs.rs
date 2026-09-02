@@ -326,6 +326,18 @@ impl OsFileSystem {
 #[derive(Debug, Default, Clone)]
 pub struct CachingFileSystem {
     inputs: Arc<Mutex<HashMap<PathBuf, CachedInput>>>,
+    recorded_inputs: Arc<Mutex<HashMap<PathBuf, CachedInputIdentity>>>,
+}
+
+/// Stable-enough input metadata for an advisory persistent-link manifest.
+///
+/// This identity must not be used to skip linker work: a later milestone will replace it with
+/// content digests supplied by mr-boxington before persistent state becomes authoritative.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CachedInputIdentity {
+    pub path: PathBuf,
+    pub modification_time: std::time::SystemTime,
+    pub len: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -361,6 +373,25 @@ impl CachingFileSystem {
         Self::default()
     }
 
+    /// Starts recording the inputs opened by the next serialized link.
+    pub fn start_recording(&self) {
+        self.recorded_inputs.lock().unwrap().clear();
+    }
+
+    /// Returns the inputs opened since [`Self::start_recording`], sorted by path.
+    #[must_use]
+    pub fn recorded_inputs(&self) -> Vec<CachedInputIdentity> {
+        let mut inputs = self
+            .recorded_inputs
+            .lock()
+            .unwrap()
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        inputs.sort_unstable_by(|left, right| left.path.cmp(&right.path));
+        inputs
+    }
+
     /// Drops cached mappings for inputs that no longer exist or have changed.
     pub fn prune(&self) {
         self.inputs.lock().unwrap().retain(|path, input| {
@@ -389,6 +420,14 @@ impl FileSystem for CachingFileSystem {
             format!("Failed to read file modification time `{}`", path.display())
         })?;
         let len = metadata.len();
+        self.recorded_inputs.lock().unwrap().insert(
+            cache_key.clone(),
+            CachedInputIdentity {
+                path: cache_key.clone(),
+                modification_time,
+                len,
+            },
+        );
 
         let mut inputs = self.inputs.lock().unwrap();
         let cached = inputs

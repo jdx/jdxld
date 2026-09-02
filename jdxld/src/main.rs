@@ -8,6 +8,8 @@ static ALLOC: dhat::Alloc = dhat::Alloc;
 
 #[cfg(unix)]
 mod mbx_worker;
+#[cfg(unix)]
+mod persistent_state;
 
 fn main() {
     if let Err(error) = run() {

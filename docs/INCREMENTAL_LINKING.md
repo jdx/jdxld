@@ -50,6 +50,13 @@ mr-boxington owns locking, retention, and garbage collection. jdxld owns the con
 of a generation: parsed ELF/archive metadata, symbol resolution results, layout reservations, and
 the reverse index from input sections to affected relocations and output ranges.
 
+The first on-disk format is intentionally advisory. After every successful full link, jdxld writes
+a versioned input manifest with an argument identity and publishes it with an atomic rename. A new
+worker in a later Cargo command loads that manifest and identifies unchanged, changed, added, and
+removed inputs. Its initial file identities use path, modification time, and length, so they cannot
+authorize reuse and never cause linker work to be skipped. Replacing those observations with
+mr-boxington content digests is the correctness boundary for persisting parsed metadata.
+
 ## Initial milestones
 
 1. Reuse unchanged input mappings inside an mr-boxington-owned worker while still performing a full

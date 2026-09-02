@@ -107,6 +107,7 @@ use crate::version_script::VersionScript;
 use colosseum::sync::Arena;
 use crossbeam_utils::atomic::AtomicCell;
 use error::AlreadyInitialised;
+pub use fs::CachedInputIdentity;
 pub use fs::CachingFileSystem;
 pub use fs::FileReplacementMode;
 pub use fs::FileSystem;
