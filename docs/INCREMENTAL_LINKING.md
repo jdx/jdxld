@@ -53,9 +53,12 @@ the reverse index from input sections to affected relocations and output ranges.
 The first on-disk format is intentionally advisory. After every successful full link, jdxld writes
 a versioned input manifest with an argument identity and publishes it with an atomic rename. A new
 worker in a later Cargo command loads that manifest and identifies unchanged, changed, added, and
-removed inputs. Its initial file identities use path, modification time, and length, so they cannot
-authorize reuse and never cause linker work to be skipped. Replacing those observations with
-mr-boxington content digests is the correctness boundary for persisting parsed metadata.
+removed inputs. Each identity includes a BLAKE3 digest of the bytes jdxld consumed, allowing an
+unchanged input to be recognized even when rustc gives its temporary file a different path. The
+owning mr-boxington session resolves those digests through its persistent file-digest ledger, so
+jdxld does not rescan every mapped input after a link; only ledger misses are hashed. Digest lookup
+is advisory and falls back to metadata if its helper is unavailable. The manifest never causes
+linker work to be skipped until parsed metadata is persisted and validated against those digests.
 
 ## Initial milestones
 

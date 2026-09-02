@@ -321,18 +321,15 @@ impl OsFileSystem {
 ///
 /// This is intended for a linker worker owned by mr-boxington. Each returned input records the
 /// identity of the file at the point where it was opened, so the usual end-of-link mutation check
-/// is retained. Content digests supplied by mr-boxington will replace the metadata identity in a
-/// later incremental-state milestone.
+/// is retained. The owning process may resolve those identities to persistent content digests
+/// without making the filesystem layer read every mapped byte a second time.
 #[derive(Debug, Default, Clone)]
 pub struct CachingFileSystem {
     inputs: Arc<Mutex<HashMap<PathBuf, CachedInput>>>,
     recorded_inputs: Arc<Mutex<HashMap<PathBuf, CachedInputIdentity>>>,
 }
 
-/// Stable-enough input metadata for an advisory persistent-link manifest.
-///
-/// This identity must not be used to skip linker work: a later milestone will replace it with
-/// content digests supplied by mr-boxington before persistent state becomes authoritative.
+/// Identity of an input consumed by a worker link.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CachedInputIdentity {
     pub path: PathBuf,
@@ -420,15 +417,6 @@ impl FileSystem for CachingFileSystem {
             format!("Failed to read file modification time `{}`", path.display())
         })?;
         let len = metadata.len();
-        self.recorded_inputs.lock().unwrap().insert(
-            cache_key.clone(),
-            CachedInputIdentity {
-                path: cache_key.clone(),
-                modification_time,
-                len,
-            },
-        );
-
         let mut inputs = self.inputs.lock().unwrap();
         let cached = inputs
             .get(&cache_key)
@@ -472,6 +460,14 @@ impl FileSystem for CachingFileSystem {
             inputs.insert(cache_key.clone(), input.clone());
             (input, file)
         };
+        self.recorded_inputs.lock().unwrap().insert(
+            cache_key.clone(),
+            CachedInputIdentity {
+                path: cache_key.clone(),
+                modification_time,
+                len,
+            },
+        );
 
         Ok((
             CachedInputFile {

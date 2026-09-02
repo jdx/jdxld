@@ -7,6 +7,8 @@ static MIMALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 static ALLOC: dhat::Alloc = dhat::Alloc;
 
 #[cfg(unix)]
+mod digest_helper;
+#[cfg(unix)]
 mod mbx_worker;
 #[cfg(unix)]
 mod persistent_state;
