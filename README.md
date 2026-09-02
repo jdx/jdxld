@@ -20,7 +20,7 @@ cargo build --release --bin jdxld
 The standalone binary remains useful for development and compatibility testing. The supported
 incremental mode is being designed around mr-boxington rather than as a general-purpose daemon.
 See [the incremental-linking design](docs/INCREMENTAL_LINKING.md) for the process and persistence
-boundary.
+boundary and [the worker prototype results](benchmarks/incremental-prototype.md) for current gains.
 
 ## Using as your default linker
 
