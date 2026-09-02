@@ -1757,8 +1757,8 @@ impl<R: RType> DynamicRelocation<'_, R> {
         // dynamic symbols.
         out.entry.is_weak = false;
 
-        // jdxld currently seems to set undefined dynamic symbols as STT_IFUNC if they resolved to an
-        // IFUNC in a shared object. Other linkers don't. TODO: Fix this.
+        // jdxld currently seems to set undefined dynamic symbols as STT_IFUNC if they resolved to
+        // an IFUNC in a shared object. Other linkers don't. TODO: Fix this.
         out.entry.is_ifunc = false;
 
         out

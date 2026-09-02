@@ -928,10 +928,11 @@ impl<'data> NameIndex<'data> {
             }
 
             if let Ok(mut name) = sym.name_bytes() {
-                // jdxld doesn't emit local symbols that start with ".L". The other linkers mostly do
-                // the same. However, GNU ld and lld, if they encounter a GOT-forming relocation to
-                // such a symbol, even if they then optimise away the GOT-forming relocation, will
-                // emit the symbol. This behaviour seems weird and not worth replicating, so we just
+                // jdxld doesn't emit local symbols that start with ".L". The other linkers mostly
+                // do the same. However, GNU ld and lld, if they encounter a
+                // GOT-forming relocation to such a symbol, even if they then
+                // optimise away the GOT-forming relocation, will emit the symbol.
+                // This behaviour seems weird and not worth replicating, so we just
                 // ignore all just symbols.
                 if name.starts_with(b".L") {
                     continue;

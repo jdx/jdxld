@@ -195,8 +195,8 @@ struct LinkerIdentifier {
     kind: LinkerKind,
     version: String,
     variant: Option<String>,
-    /// The commit hash of the linker. Set for jdxld when the path to the linker doesn't include the
-    /// version number. i.e. when we've concluded that this isn't a release version.
+    /// The commit hash of the linker. Set for jdxld when the path to the linker doesn't include
+    /// the version number. i.e. when we've concluded that this isn't a release version.
     hash: Option<String>,
     /// If we've got has, then this is one patch level higher than version.
     effective_version: Vec<u32>,

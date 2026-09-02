@@ -1,1 +1,1 @@
-target/release/wild
+target/release/jdxld
