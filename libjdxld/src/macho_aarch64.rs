@@ -112,7 +112,7 @@ impl crate::platform::Arch for MachOAArch64 {
         };
 
         let (kind, size, mask, range, alignment) = match rel.r_type {
-            object::macho::ARM64_RELOC_UNSIGNED => {
+            object::macho::ARM64_RELOC_UNSIGNED | object::macho::ARM64_RELOC_SUBTRACTOR => {
                 (rel_kind, rel_size, None, AllowedRange::no_check(), 1)
             }
             object::macho::ARM64_RELOC_BRANCH26 => {
@@ -167,6 +167,13 @@ impl crate::platform::Arch for MachOAArch64 {
                     1,
                 )
             }
+            object::macho::ARM64_RELOC_POINTER_TO_GOT => (
+                RelocationKind::GotRelative,
+                rel_size,
+                None,
+                AllowedRange::no_check(),
+                1,
+            ),
             _ => bail!("Unknown relocation: {}", rel.r_type),
         };
         Ok(RelocationKindInfo {

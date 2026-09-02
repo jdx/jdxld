@@ -368,10 +368,36 @@ fn exported_symbol_is_weak(layout: &MachOLayout<'_>, symbol_id: SymbolId) -> Res
 fn write_got_entries(layout: &MachOLayout<'_>, got: &mut [u8]) -> Result {
     let got_layout = layout.section_layouts.get(output_section_id::GOT);
 
-    let sorted_symbols = &layout.format_specific.imported_symbols;
-    for (i, imported_symbol) in sorted_symbols.iter().enumerate() {
-        let offset = imported_symbol
-            .got_address
+    enum GotEntry<'a> {
+        Import(usize, &'a crate::macho::ImportedSymbolWithResolution),
+        Local(&'a crate::macho::LocalGotEntry),
+    }
+
+    let mut entries = layout
+        .format_specific
+        .imported_symbols
+        .iter()
+        .enumerate()
+        .map(|(ordinal, symbol)| GotEntry::Import(ordinal, symbol))
+        .chain(
+            layout
+                .format_specific
+                .local_got_entries
+                .iter()
+                .map(GotEntry::Local),
+        )
+        .collect_vec();
+    entries.sort_by_key(|entry| match entry {
+        GotEntry::Import(_, symbol) => symbol.got_address,
+        GotEntry::Local(entry) => entry.got_address,
+    });
+
+    for (i, entry) in entries.iter().enumerate() {
+        let got_address = match entry {
+            GotEntry::Import(_, symbol) => symbol.got_address,
+            GotEntry::Local(entry) => entry.got_address,
+        };
+        let offset = got_address
             .get()
             .checked_sub(got_layout.mem_offset)
             .ok_or_else(|| error!("GOT entry address is before __got"))?
@@ -386,12 +412,24 @@ fn write_got_entries(layout: &MachOLayout<'_>, got: &mut [u8]) -> Result {
           next: 12 // 4-byte stride
           bind: 1 // == 1
         */
-        let bind = 1u64 << 63;
         // TODO: when crossing a page boundary, next is equal to zero
-        let next = if i == sorted_symbols.len() - 1 { 0 } else { 2 };
+        let next = if i == entries.len() - 1 { 0 } else { 2 };
         let next = next << 51;
-        let ordinal = i as u64;
-        got[offset..end].copy_from_slice(&(bind | next | ordinal).to_le_bytes());
+        let value = match entry {
+            GotEntry::Import(ordinal, _) => (1u64 << 63) | next | *ordinal as u64,
+            GotEntry::Local(entry) => {
+                let target = entry
+                    .target_address
+                    .checked_sub(MACHO_START_MEM_ADDRESS)
+                    .context("local GOT target is before the Mach-O image base")?;
+                ensure!(
+                    target < (1u64 << 36),
+                    "local GOT target exceeds DYLD_CHAINED_PTR_64_OFFSET range"
+                );
+                next | target
+            }
+        };
+        got[offset..end].copy_from_slice(&value.to_le_bytes());
     }
 
     Ok(())
@@ -613,17 +651,93 @@ fn write_object_section<'data, A: Arch<Platform = MachO>>(
 
     let section_flags = object_layout.object.section(section_index)?.flags.get(LE);
 
+    let mut pending_subtractor = None;
+    let mut pending_addend = None;
     for rel in object_layout.relocations(section_index)?.relocations {
+        let rel = rel.info(LE);
+        if rel.r_type == macho::ARM64_RELOC_ADDEND {
+            ensure!(
+                pending_addend.is_none(),
+                "consecutive ARM64_RELOC_ADDEND relocations"
+            );
+            pending_addend = Some(
+                i64::from(rel.r_symbolnum)
+                    .wrapping_shl(64 - 24)
+                    .wrapping_shr(64 - 24),
+            );
+            continue;
+        }
+        if rel.r_type == macho::ARM64_RELOC_SUBTRACTOR {
+            ensure!(
+                pending_subtractor.replace(rel).is_none(),
+                "consecutive ARM64_RELOC_SUBTRACTOR relocations"
+            );
+            continue;
+        }
+
+        if let Some(subtractor) = pending_subtractor.take() {
+            apply_subtractor_pair(object_layout, subtractor, rel, layout, out)?;
+            continue;
+        }
+
         apply_relocation::<A>(
             object_layout,
             section_address,
             section_flags,
-            rel.info(LE),
+            rel,
+            pending_addend.take().unwrap_or(0),
             layout,
             out,
         )?;
     }
+    ensure!(
+        pending_subtractor.is_none(),
+        "ARM64_RELOC_SUBTRACTOR is missing its paired ARM64_RELOC_UNSIGNED"
+    );
+    ensure!(
+        pending_addend.is_none(),
+        "ARM64_RELOC_ADDEND is missing its paired relocation"
+    );
 
+    Ok(())
+}
+
+fn apply_subtractor_pair<'data>(
+    object_layout: &ObjectLayout<'data, MachO>,
+    subtractor: RelocationInfo,
+    minuend: RelocationInfo,
+    layout: &MachOLayout<'data>,
+    out: &mut [u8],
+) -> Result {
+    ensure!(
+        minuend.r_type == macho::ARM64_RELOC_UNSIGNED
+            && minuend.r_address == subtractor.r_address
+            && minuend.r_length == subtractor.r_length,
+        "ARM64_RELOC_SUBTRACTOR must be followed by a matching ARM64_RELOC_UNSIGNED"
+    );
+
+    let (subtrahend, _, _) = get_resolution(subtractor, object_layout, layout)?;
+    let (minuend_value, _, _) = get_resolution(minuend, object_layout, layout)?;
+    let offset = minuend.r_address as usize;
+    let size = 1usize << minuend.r_length;
+    let bytes = out
+        .get(offset..offset + size)
+        .context("subtractor relocation is outside its section")?;
+    let addend = match size {
+        4 => i32::from_le_bytes(bytes.try_into().unwrap()) as i64,
+        8 => i64::from_le_bytes(bytes.try_into().unwrap()),
+        _ => bail!("unsupported ARM64_RELOC_SUBTRACTOR size: {size} bytes"),
+    };
+    let value = minuend_value
+        .raw_value
+        .wrapping_sub(subtrahend.raw_value)
+        .wrapping_add_signed(addend);
+
+    match size {
+        4 => out[offset..offset + size].copy_from_slice(&(value as u32).to_le_bytes()),
+        8 => out[offset..offset + size].copy_from_slice(&value.to_le_bytes()),
+        _ => unreachable!(),
+    }
     Ok(())
 }
 
@@ -633,6 +747,7 @@ fn apply_relocation<'data, A: Arch<Platform = MachO>>(
     section_address: u64,
     section_flags: SectionFlags,
     rel: RelocationInfo,
+    mut addend: i64,
     layout: &MachOLayout<'data>,
     out: &mut [u8],
 ) -> Result {
@@ -650,7 +765,7 @@ fn apply_relocation<'data, A: Arch<Platform = MachO>>(
     let flags = layout.flags_for_symbol(local_symbol_id);
     let output_kind = layout.symbol_db.output_kind;
 
-    // TODO: We don't support addends, relaxation deltas, or previous relocations yet.
+    // TODO: We don't support relaxation deltas or previous relocations yet.
     let relaxation = A::new_relaxation(
         rel,
         out,
@@ -661,13 +776,13 @@ fn apply_relocation<'data, A: Arch<Platform = MachO>>(
         None,
         resolution.raw_value,
         section_address,
-        0,
+        addend,
         None,
     );
 
     let rel_info = match relaxation.as_ref() {
         Some(relaxation) => {
-            relaxation.apply(out, &mut offset_in_section, &mut 0);
+            relaxation.apply(out, &mut offset_in_section, &mut addend);
             relaxation.rel_info()
         }
         None if rel.r_type == ARM64_RELOC_TLVP_LOAD_PAGEOFF12 => {
@@ -680,18 +795,29 @@ fn apply_relocation<'data, A: Arch<Platform = MachO>>(
     };
 
     let mask = get_page_mask(rel_info.mask);
+    let relocation_target = match rel_info.kind {
+        RelocationKind::GotRelative | RelocationKind::Got => resolution
+            .format_specific
+            .got_address
+            .context("missing GOT address for relocation")?
+            .get(),
+        RelocationKind::Relative if rel.r_type == macho::ARM64_RELOC_BRANCH26 => resolution
+            .format_specific
+            .plt_address
+            .map_or(resolution.raw_value, |address| address.get()),
+        _ => resolution.raw_value,
+    };
+    let symbol_plus_addend = relocation_target.wrapping_add_signed(addend);
     let value = match rel_info.kind {
-        RelocationKind::Absolute => resolution.raw_value.bitand(mask.symbol_plus_addend),
-        RelocationKind::AbsoluteLowPart => resolution.raw_value.bitand(mask.symbol_plus_addend),
-        RelocationKind::Relative => resolution
-            .raw_value
+        RelocationKind::Absolute => symbol_plus_addend.bitand(mask.symbol_plus_addend),
+        RelocationKind::AbsoluteLowPart => symbol_plus_addend.bitand(mask.symbol_plus_addend),
+        RelocationKind::Relative => symbol_plus_addend
             .bitand(mask.symbol_plus_addend)
             .wrapping_sub(place.bitand(mask.place)),
-        RelocationKind::GotRelative => resolution
-            .raw_value
+        RelocationKind::GotRelative => symbol_plus_addend
             .bitand(mask.symbol_plus_addend)
             .wrapping_sub(place.bitand(mask.place)),
-        RelocationKind::Got => resolution.raw_value.bitand(mask.symbol_plus_addend),
+        RelocationKind::Got => symbol_plus_addend.bitand(mask.symbol_plus_addend),
         _ => todo!(),
     };
 

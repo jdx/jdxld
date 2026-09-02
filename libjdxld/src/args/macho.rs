@@ -61,6 +61,10 @@ pub(crate) struct PlatformVersion {
 }
 
 const SILENTLY_IGNORED_FLAGS: &[&str] = &[
+    // rustc passes this for Darwin executables even in development profiles. Incremental Mach-O
+    // links deliberately keep all sections for now: stable layout is more valuable to the
+    // mr-boxington edit-build-run loop than removing unreachable code from a development binary.
+    "dead_strip",
     "no_deduplicate",
     // Mach-O appears to always demangle symbols.
     "demangle",
@@ -360,6 +364,7 @@ mod tests {
         "-lto_library",
         "/foo/bar/libLTO.dylib",
         "-no_deduplicate",
+        "-dead_strip",
         "-platform_version",
         "macos",
         "14.0",
@@ -388,6 +393,7 @@ mod tests {
             })
         );
         assert!(args.common.demangle);
+        assert!(!args.should_gc_sections());
         assert_eq!(args.sysroot, Some(Box::from(Path::new("/foo/bar"))));
         assert!(args.common.inputs.iter().any(|i| match &i.spec {
             InputSpec::File(f) => f.as_ref() == Path::new("main.o"),
