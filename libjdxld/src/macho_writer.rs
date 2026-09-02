@@ -39,6 +39,7 @@ use crate::macho::FileHeader;
 use crate::macho::GOT_ENTRY_SIZE;
 use crate::macho::MACHO_COMMAND_ALIGNMENT;
 use crate::macho::MACHO_START_MEM_ADDRESS;
+use crate::macho::MAX_CHAINED_FIXUP_PAGES_PER_SEGMENT;
 use crate::macho::MAX_SEGMENT_COUNT;
 use crate::macho::MachO;
 use crate::macho::PLT_ENTRY_SIZE;
@@ -107,6 +108,7 @@ use object::macho::MH_CIGAM_64;
 use object::macho::MH_EXECUTE;
 use object::macho::N_ABS;
 use object::macho::N_SECT;
+use object::macho::N_UNDF;
 use object::macho::PLATFORM_MACOS;
 use object::macho::RelocationInfo;
 use object::macho::SegmentFlags;
@@ -118,6 +120,7 @@ use rayon::iter::ParallelIterator;
 use rayon::slice::ParallelSlice;
 use sha2::Digest;
 use sha2::Sha256;
+use std::collections::HashMap;
 use std::ops::BitAnd;
 use tracing::debug_span;
 use zerocopy::FromZeros;
@@ -165,6 +168,16 @@ pub(crate) fn write<'data, A: Arch<Platform = MachO>>(
     let mut section_buffers = split_output_into_sections(layout, &mut sized_output.out).0;
     write_got_entries(layout, section_buffers.get_mut(output_section_id::GOT))?;
     write_plt_entries::<A>(layout, section_buffers.get_mut(output_section_id::PLT_GOT))?;
+    drop(section_buffers);
+
+    let fixups = collect_chained_fixups(layout, &sized_output.out)?;
+    apply_chained_fixups(layout, &fixups, &mut sized_output.out)?;
+    let mut section_buffers = split_output_into_sections(layout, &mut sized_output.out).0;
+    write_chained_fixup_table(
+        layout,
+        &fixups,
+        section_buffers.get_mut(output_section_id::CHAINED_FIXUP_TABLE),
+    )?;
 
     write_code_signature_metadata(layout, sized_output)?;
     write_uuid(layout, sized_output)?;
@@ -277,11 +290,11 @@ fn write_prelude<'data>(
 fn write_epilogue(
     _epilogue: &EpilogueLayout<MachO>,
     buffers: &mut OutputSectionPartMap<&mut [u8]>,
-    layout: &MachOLayout<'_>,
+    _layout: &MachOLayout<'_>,
     exports_trie: &[u8],
 ) -> Result {
     verbose_timing_phase!("Write epilogue");
-    write_chained_fixup_table(layout, buffers.get_mut(part_id::CHAINED_FIXUP_TABLE))?;
+    buffers.get_mut(part_id::CHAINED_FIXUP_TABLE).fill(0);
     let out = buffers.get_mut(part_id::EXPORTS_TRIE);
     ensure!(
         exports_trie.len() <= out.len(),
@@ -310,7 +323,7 @@ fn build_exports_trie(layout: &MachOLayout<'_>) -> Result<Vec<u8>> {
     let mut symbols = layout
         .dynamic_symbol_definitions
         .iter()
-        .map(|symbol| {
+        .filter_map(|symbol| {
             let resolution = layout
                 .symbol_resolutions
                 .get(symbol.symbol_id)
@@ -319,37 +332,44 @@ fn build_exports_trie(layout: &MachOLayout<'_>) -> Result<Vec<u8>> {
                         "Missing resolution for exported symbol `{}`",
                         String::from_utf8_lossy(symbol.name)
                     )
-                })?;
-
-            let (address, mut flags) = if resolution.is_absolute() {
-                (
-                    resolution.raw_value,
-                    object::macho::EXPORT_SYMBOL_FLAGS_KIND_ABSOLUTE.into(),
-                )
-            } else {
-                (
-                    resolution
-                        .raw_value
-                        .checked_sub(image_base)
-                        .with_context(|| {
-                            format!(
-                                "Exported symbol `{}` is before the Mach-O image base",
-                                String::from_utf8_lossy(symbol.name)
-                            )
-                        })?,
-                    object::macho::ExportSymbolFlags(0),
-                )
+                });
+            let resolution = match resolution {
+                Ok(resolution) => resolution,
+                Err(error) => return Some(Err(error)),
             };
 
-            if exported_symbol_is_weak(layout, symbol.symbol_id)? {
-                flags |= object::macho::EXPORT_SYMBOL_FLAGS_WEAK_DEFINITION;
+            // Archive members can contain global symbols whose sections were not selected. They
+            // have no address and must not appear in the executable's exports trie.
+            if !resolution.is_absolute() && resolution.raw_value < image_base {
+                return None;
             }
 
-            Ok(crate::trie::Symbol {
-                name: symbol.name,
-                address,
-                flags,
-            })
+            Some((|| -> Result<_> {
+                let (address, mut flags) = if resolution.is_absolute() {
+                    (
+                        resolution.raw_value,
+                        object::macho::EXPORT_SYMBOL_FLAGS_KIND_ABSOLUTE.into(),
+                    )
+                } else {
+                    (
+                        resolution
+                            .raw_value
+                            .checked_sub(image_base)
+                            .context("exported symbol is before the Mach-O image base")?,
+                        object::macho::ExportSymbolFlags(0),
+                    )
+                };
+
+                if exported_symbol_is_weak(layout, symbol.symbol_id)? {
+                    flags |= object::macho::EXPORT_SYMBOL_FLAGS_WEAK_DEFINITION;
+                }
+
+                Ok(crate::trie::Symbol {
+                    name: symbol.name,
+                    address,
+                    flags,
+                })
+            })())
         })
         .collect::<Result<Vec<_>>>()?;
 
@@ -482,7 +502,11 @@ fn populate_file_header(
         .set(LE, load_commands_info.file_size as u32);
     header.flags.set(
         LE,
-        macho::MH_PIE | macho::MH_DYLDLINK | macho::MH_NOUNDEFS | macho::MH_TWOLEVEL,
+        macho::MH_PIE
+            | macho::MH_DYLDLINK
+            | macho::MH_NOUNDEFS
+            | macho::MH_TWOLEVEL
+            | macho::MH_HAS_TLV_DESCRIPTORS,
     );
     header.reserved.set(LE, 0);
 }
@@ -631,6 +655,8 @@ fn write_object<'data, A: Arch<Platform = MachO>>(
         }
     }
 
+    write_thunks::<A>(object, buffers, layout)?;
+
     write_symbols(object, buffers, layout, symbol_writer)?;
 
     Ok(())
@@ -650,6 +676,8 @@ fn write_object_section<'data, A: Arch<Platform = MachO>>(
         .context("Attempted to apply relocations to a section that we didn't load")?;
 
     let section_flags = object_layout.object.section(section_index)?.flags.get(LE);
+    let section_part_id =
+        object_layout.section_part_id(section_index, &layout.symbol_db.section_part_ids);
 
     let mut pending_subtractor = None;
     let mut pending_addend = None;
@@ -682,6 +710,7 @@ fn write_object_section<'data, A: Arch<Platform = MachO>>(
 
         apply_relocation::<A>(
             object_layout,
+            section_part_id,
             section_address,
             section_flags,
             rel,
@@ -764,6 +793,7 @@ fn subtractor_operand_value<'data>(
 #[inline(always)]
 fn apply_relocation<'data, A: Arch<Platform = MachO>>(
     object_layout: &ObjectLayout<'data, MachO>,
+    section_part_id: crate::part_id::PartId,
     section_address: u64,
     section_flags: SectionFlags,
     rel: RelocationInfo,
@@ -828,7 +858,16 @@ fn apply_relocation<'data, A: Arch<Platform = MachO>>(
         _ => resolution.raw_value,
     };
     let symbol_plus_addend = relocation_target.wrapping_add_signed(addend);
-    let value = match rel_info.kind {
+    let is_tlv_template_offset = section_flags.0 & macho::SECTION_TYPE
+        == u32::from(macho::S_THREAD_LOCAL_VARIABLES.0)
+        && offset_in_section % 24 == 16;
+    let mut value = match rel_info.kind {
+        RelocationKind::Absolute if is_tlv_template_offset => {
+            let tls_start = macho_tls_start(layout).context("TLV descriptor requires TLS data")?;
+            symbol_plus_addend
+                .checked_sub(tls_start)
+                .context("TLV template symbol is before the TLS segment")?
+        }
         RelocationKind::Absolute => symbol_plus_addend.bitand(mask.symbol_plus_addend),
         RelocationKind::AbsoluteLowPart => symbol_plus_addend.bitand(mask.symbol_plus_addend),
         RelocationKind::Relative => symbol_plus_addend
@@ -840,6 +879,18 @@ fn apply_relocation<'data, A: Arch<Platform = MachO>>(
         RelocationKind::Got => symbol_plus_addend.bitand(mask.symbol_plus_addend),
         _ => todo!(),
     };
+
+    if let Some(thunked_value) = maybe_get_thunk_for_relocation::<A>(
+        object_layout,
+        section_part_id,
+        layout,
+        rel_info,
+        local_symbol_id,
+        place,
+        value,
+    )? {
+        value = thunked_value;
+    }
 
     tracing::trace!(
             %flags,
@@ -861,6 +912,111 @@ fn apply_relocation<'data, A: Arch<Platform = MachO>>(
         })?;
 
     Ok(())
+}
+
+fn maybe_get_thunk_for_relocation<A: Arch<Platform = MachO>>(
+    object_layout: &ObjectLayout<MachO>,
+    section_part_id: crate::part_id::PartId,
+    layout: &MachOLayout,
+    rel_info: linker_utils::elf::RelocationKindInfo,
+    local_symbol_id: SymbolId,
+    place: u64,
+    value: u64,
+) -> Result<Option<u64>> {
+    let Some(config) = A::thunk_config() else {
+        return Ok(None);
+    };
+    if !rel_info.thunkable || rel_info.range.contains(value as i64) {
+        return Ok(None);
+    }
+
+    let canonical_id = layout.symbol_db.definition(local_symbol_id);
+    let thunk_id = if section_part_id == config.primary_function_part_id {
+        object_layout.thunk_block_id
+    } else {
+        crate::thunks::ThunkBlockId::FIRST
+    };
+    let thunk_address = layout
+        .thunk_block_addresses
+        .get(thunk_id.as_usize())
+        .and_then(|addresses| addresses.get(&canonical_id))
+        .copied()
+        .with_context(|| {
+            format!(
+                "Branch relocation to {} is out of range but has no thunk (source {}, primary {}, target {}, block {})",
+                layout.symbol_db.symbol_name_for_display(local_symbol_id),
+                layout.output_sections.part_debug(section_part_id),
+                layout.output_sections.part_debug(config.primary_function_part_id),
+                layout.output_sections.part_debug(
+                    layout.symbol_db.part_id_for_symbol(canonical_id),
+                ),
+                thunk_id.as_usize(),
+            )
+        })?;
+
+    let mask = get_page_mask(rel_info.mask);
+    Ok(Some(
+        thunk_address
+            .wrapping_add(rel_info.bias)
+            .bitand(mask.symbol_plus_addend)
+            .wrapping_sub(place.bitand(mask.place)),
+    ))
+}
+
+fn write_thunks<A: Arch<Platform = MachO>>(
+    object: &ObjectLayout<MachO>,
+    buffers: &mut OutputSectionPartMap<&mut [u8]>,
+    layout: &MachOLayout,
+) -> Result {
+    if !object.owns_thunk_block {
+        return Ok(());
+    }
+    let Some(addresses) = layout
+        .thunk_block_addresses
+        .get(object.thunk_block_id.as_usize())
+    else {
+        return Ok(());
+    };
+    let Some(config) = A::thunk_config() else {
+        return Ok(());
+    };
+
+    for (symbol_id, &thunk_address) in addresses {
+        let resolution = layout
+            .merged_symbol_resolution(*symbol_id)
+            .with_context(|| {
+                format!(
+                    "No resolution for symbol {} needed by thunk",
+                    layout.symbol_db.symbol_name_for_display(*symbol_id)
+                )
+            })?;
+        let target_address = resolution
+            .format_specific
+            .plt_address
+            .map_or(resolution.raw_value, |address| address.get());
+        let thunk = buffers
+            .get_mut(config.primary_function_part_id)
+            .split_off_mut(..config.thunk_size as usize)
+            .ok_or_else(|| crate::file_writer::insufficient_allocation("Mach-O thunk space"))?;
+        A::write_thunk(thunk_address, target_address, thunk);
+    }
+
+    Ok(())
+}
+
+fn macho_tls_start(layout: &MachOLayout<'_>) -> Option<u64> {
+    layout
+        .section_layouts
+        .iter()
+        .filter(|(section_id, section)| {
+            let section_type =
+                layout.output_sections.section_flags(*section_id).0 & macho::SECTION_TYPE;
+            section.mem_size != 0
+                && (section_type == u32::from(macho::S_THREAD_LOCAL_REGULAR.0)
+                    || section_type == u32::from(macho::S_THREAD_LOCAL_ZEROFILL.0))
+        })
+        .map(|(_, section)| section.mem_offset)
+        .min()
 }
 
 fn write_section_raw<'out, 'data>(
@@ -1102,7 +1258,242 @@ fn write_code_signature_command(layout: &MachOLayout, command: &mut CodeSignatur
     command.datasize.set(LE, code_signature.file_size as u32);
 }
 
-fn write_chained_fixup_table(layout: &MachOLayout, chained_fixup_table: &mut [u8]) -> Result {
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum ChainedFixupTarget {
+    Rebase(u64),
+    Bind { ordinal: u32, addend: u8 },
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+struct ChainedFixup {
+    segment_index: usize,
+    address: u64,
+    file_offset: usize,
+    target: ChainedFixupTarget,
+}
+
+fn collect_chained_fixups(layout: &MachOLayout<'_>, output: &[u8]) -> Result<Vec<ChainedFixup>> {
+    let import_ordinals = layout
+        .format_specific
+        .imported_symbols
+        .iter()
+        .enumerate()
+        .map(|(ordinal, symbol)| {
+            (
+                layout.symbol_db.definition(symbol.symbol_id),
+                ordinal as u32,
+            )
+        })
+        .collect::<HashMap<_, _>>();
+    let mut fixups = Vec::new();
+
+    for group in &layout.group_layouts {
+        for file in &group.files {
+            let FileLayout::Object(object) = file else {
+                continue;
+            };
+            for (section_number, section) in object.sections.iter().enumerate() {
+                let SectionSlot::Loaded(_) = section else {
+                    continue;
+                };
+                let section_index = object::SectionIndex(section_number);
+                let Some(section_address) = object.section_resolutions[section_number].address()
+                else {
+                    continue;
+                };
+                let section_flags = object.object.section(section_index)?.flags.get(LE);
+                let is_tlv_descriptors = section_flags.0 & macho::SECTION_TYPE
+                    == u32::from(macho::S_THREAD_LOCAL_VARIABLES.0);
+                let mut pending_subtractor = false;
+
+                for relocation in object.relocations(section_index)?.relocations {
+                    let relocation = relocation.info(LE);
+                    if relocation.r_type == macho::ARM64_RELOC_SUBTRACTOR {
+                        pending_subtractor = true;
+                        continue;
+                    }
+                    if pending_subtractor {
+                        pending_subtractor = false;
+                        continue;
+                    }
+                    if relocation.r_type == macho::ARM64_RELOC_ADDEND {
+                        continue;
+                    }
+                    if relocation.r_type != macho::ARM64_RELOC_UNSIGNED
+                        || relocation.r_length != 3
+                        || relocation.r_pcrel
+                    {
+                        continue;
+                    }
+
+                    let offset = u64::from(relocation.r_address);
+                    if is_tlv_descriptors && offset % 24 == 16 {
+                        // The third TLV descriptor field is an offset into the TLS template, not a
+                        // pointer. It was converted while applying relocations.
+                        continue;
+                    }
+
+                    let address = section_address + offset;
+                    let Some((segment_index, file_offset)) = fixup_location(layout, address)?
+                    else {
+                        continue;
+                    };
+                    let bytes = output
+                        .get(file_offset..file_offset + size_of::<u64>())
+                        .context("chained fixup is outside the output file")?;
+                    let relocated_value = u64::from_le_bytes(bytes.try_into().unwrap());
+                    let (resolution, _, local_symbol_id) =
+                        get_resolution(relocation, object, layout)?;
+                    let target = if resolution.flags.is_dynamic() {
+                        let canonical_id = layout.symbol_db.definition(local_symbol_id);
+                        let ordinal = *import_ordinals.get(&canonical_id).with_context(|| {
+                            format!(
+                                "missing chained import for {}",
+                                layout.symbol_debug(local_symbol_id)
+                            )
+                        })?;
+                        let addend = relocated_value.wrapping_sub(resolution.raw_value);
+                        ensure!(
+                            addend <= u8::MAX.into(),
+                            "chained bind addend for {} exceeds 8 bits",
+                            layout.symbol_debug(local_symbol_id)
+                        );
+                        ChainedFixupTarget::Bind {
+                            ordinal,
+                            addend: addend as u8,
+                        }
+                    } else {
+                        ChainedFixupTarget::Rebase(relocated_value)
+                    };
+                    fixups.push(ChainedFixup {
+                        segment_index,
+                        address,
+                        file_offset,
+                        target,
+                    });
+                }
+            }
+        }
+    }
+
+    for (ordinal, symbol) in layout.format_specific.imported_symbols.iter().enumerate() {
+        let address = symbol.got_address.get();
+        let (segment_index, file_offset) = fixup_location(layout, address)?
+            .context("imported GOT entry is outside a writable segment")?;
+        fixups.push(ChainedFixup {
+            segment_index,
+            address,
+            file_offset,
+            target: ChainedFixupTarget::Bind {
+                ordinal: ordinal as u32,
+                addend: 0,
+            },
+        });
+    }
+    for entry in &layout.format_specific.local_got_entries {
+        let address = entry.got_address.get();
+        let (segment_index, file_offset) = fixup_location(layout, address)?
+            .context("local GOT entry is outside a writable segment")?;
+        fixups.push(ChainedFixup {
+            segment_index,
+            address,
+            file_offset,
+            target: ChainedFixupTarget::Rebase(entry.target_address),
+        });
+    }
+
+    fixups.sort_unstable_by_key(|fixup| (fixup.segment_index, fixup.address));
+    let mut deduplicated: Vec<ChainedFixup> = Vec::with_capacity(fixups.len());
+    for fixup in fixups {
+        if let Some(previous) = deduplicated.last() {
+            if previous.address == fixup.address {
+                ensure!(
+                    *previous == fixup,
+                    "conflicting chained fixups at {:#x}",
+                    fixup.address
+                );
+                continue;
+            }
+        }
+        deduplicated.push(fixup);
+    }
+    Ok(deduplicated)
+}
+
+fn fixup_location(layout: &MachOLayout<'_>, address: u64) -> Result<Option<(usize, usize)>> {
+    for (segment_index, segment) in layout.segment_layouts.segments.iter().enumerate() {
+        let segment_end = segment.sizes.mem_offset + segment.sizes.file_size as u64;
+        if address < segment.sizes.mem_offset || address + 8 > segment_end {
+            continue;
+        }
+        let segment_name = layout.program_segments.segment_def(segment.id).name;
+        if !segment_name.is_writable() {
+            return Ok(None);
+        }
+        let offset_in_segment = (address - segment.sizes.mem_offset) as usize;
+        return Ok(Some((
+            segment_index,
+            segment.sizes.file_offset + offset_in_segment,
+        )));
+    }
+    Ok(None)
+}
+
+fn apply_chained_fixups(
+    layout: &MachOLayout<'_>,
+    fixups: &[ChainedFixup],
+    output: &mut [u8],
+) -> Result {
+    let image_base = layout
+        .segment_layouts
+        .segments
+        .iter()
+        .find(|segment| layout.program_segments.segment_def(segment.id).name == SegmentName::TEXT)
+        .context("missing Mach-O __TEXT segment")?
+        .sizes
+        .mem_offset;
+    let page_size = MACHO_PAGE_ALIGNMENT.value();
+
+    for (index, fixup) in fixups.iter().enumerate() {
+        let next = fixups.get(index + 1).filter(|next| {
+            next.segment_index == fixup.segment_index
+                && (next.address / page_size) == (fixup.address / page_size)
+        });
+        let next_stride = next.map_or(0, |next| (next.address - fixup.address) / 4);
+        ensure!(
+            next_stride < (1 << 12),
+            "chained fixup stride exceeds 12 bits"
+        );
+        let next_bits = next_stride << 51;
+        let value = match fixup.target {
+            ChainedFixupTarget::Rebase(target) => {
+                let runtime_offset = target
+                    .checked_sub(image_base)
+                    .context("chained rebase target is before the image base")?;
+                ensure!(
+                    runtime_offset < (1u64 << 36),
+                    "chained rebase target exceeds 36 bits"
+                );
+                next_bits | runtime_offset | ((target >> 56) << 36)
+            }
+            ChainedFixupTarget::Bind { ordinal, addend } => {
+                ensure!(
+                    ordinal < (1 << 24),
+                    "chained import ordinal exceeds 24 bits"
+                );
+                (1u64 << 63) | next_bits | (u64::from(addend) << 24) | u64::from(ordinal)
+            }
+        };
+        output[fixup.file_offset..fixup.file_offset + 8].copy_from_slice(&value.to_le_bytes());
+    }
+    Ok(())
+}
+
+fn write_chained_fixup_table(
+    layout: &MachOLayout,
+    fixups: &[ChainedFixup],
+    chained_fixup_table: &mut [u8],
+) -> Result {
     let symbols = &layout.format_specific.imported_symbols;
     let active_segments = &layout.segment_layouts.segments;
 
@@ -1113,18 +1504,50 @@ fn write_chained_fixup_table(layout: &MachOLayout, chained_fixup_table: &mut [u8
         "unexpected number of active segments"
     );
     let starts_in_image_len = size_of::<u32>() * (segment_count + 1);
-    let starts_in_segment_len =
-        size_of::<ChainedStartsInSegment>() + CHAINED_FIXUP_PAGE_START_SIZE as usize;
+    let fixup_segments = fixups
+        .iter()
+        .chunk_by(|fixup| fixup.segment_index)
+        .into_iter()
+        .map(|(segment_index, fixups)| -> Result<_> {
+            let fixups = fixups.collect_vec();
+            let segment = &active_segments[segment_index];
+            let last = fixups.last().unwrap();
+            let page_count = ((last.address - segment.sizes.mem_offset)
+                / MACHO_PAGE_ALIGNMENT.value()
+                + 1) as usize;
+            ensure!(
+                page_count <= MAX_CHAINED_FIXUP_PAGES_PER_SEGMENT,
+                "Mach-O fixup segment exceeds the mbx development-build size limit"
+            );
+            Ok((segment_index, page_count, fixups))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let starts_in_segments_len = fixup_segments
+        .iter()
+        .map(|(_, page_count, _)| {
+            size_of::<ChainedStartsInSegment>()
+                + CHAINED_FIXUP_PAGE_START_SIZE as usize * page_count
+        })
+        .sum::<usize>();
     let imports_len = size_of::<u32>() * symbols.len();
 
     let starts_offset = size_of::<ChainedFixupsHeader>();
-    let imports_offset = starts_offset + starts_in_image_len + starts_in_segment_len;
+    let imports_offset = starts_offset + starts_in_image_len + starts_in_segments_len;
     let symbols_offset = imports_offset + imports_len;
+    ensure!(
+        symbols_offset <= chained_fixup_table.len(),
+        "Mach-O chained fixups exceeded their reserved size"
+    );
 
     let (header, rest) = from_bytes_mut::<ChainedFixupsHeader>(chained_fixup_table)
         .map_err(|_| error!("Invalid chained fixups header allocation"))?;
-    let (starts_in_image, rest) = slice_from_bytes_mut::<U32<Endianness>>(rest, segment_count + 1)
-        .map_err(|_| error!("Invalid chained fixups starts allocation"))?;
+    let (starts_in_image_bytes, rest) = rest.split_at_mut(starts_in_image_len);
+    let (starts_in_image, _) =
+        slice_from_bytes_mut::<U32<Endianness>>(starts_in_image_bytes, segment_count + 1)
+            .map_err(|_| error!("Invalid chained fixups starts allocation"))?;
+    let (starts_in_segments, rest) = rest.split_at_mut(starts_in_segments_len);
+    let (imports, string_pool) = slice_from_bytes_mut::<U32<Endianness>>(rest, symbols.len())
+        .map_err(|_| error!("Invalid chained fixups imports allocation"))?;
 
     // 1) fill up ChainedFixupsHeader
     header.fixups_version.set(LE, 0);
@@ -1135,54 +1558,67 @@ fn write_chained_fixup_table(layout: &MachOLayout, chained_fixup_table: &mut [u8
     header.imports_format.set(LE, DYLD_CHAINED_IMPORT);
     header.symbols_format.set(LE, 0);
 
-    // 2) fill up dyld_chained_starts_in_image, which is `seg_count` (u32) followed by
-    //    `seg_info_offset` ([u32; seg_count]); only __DATA_CONST,__got segment is covered
+    // 2) Fill dyld_chained_starts_in_image, which is `seg_count` (u32) followed by
+    // `seg_info_offset` ([u32; seg_count]).
     starts_in_image[0].set(LE, segment_count as u32);
     starts_in_image[1..].fill(U32::new(LE, 0));
 
-    // Early exit if we don't have any GOT entry to be encoded.
-    if layout.section_layouts.get(output_section_id::GOT).mem_size == 0 {
-        rest.zero();
-        return Ok(());
-    }
-
-    let (data_const_segment_index, data_const_segment) = active_segments
+    // 3) Emit one starts-in-segment record for each segment that contains fixups.
+    let image_base = active_segments
         .iter()
-        .enumerate()
-        .find(|(_, segment)| {
-            layout.program_segments.segment_def(segment.id).name == SegmentName::DATA_CONST
-        })
-        .ok_or_else(|| error!("non-empty __got requires __DATA_CONST segment"))?;
+        .find(|segment| layout.program_segments.segment_def(segment.id).name == SegmentName::TEXT)
+        .context("missing Mach-O __TEXT segment")?
+        .sizes
+        .mem_offset;
+    let mut segment_bytes = starts_in_segments;
+    let mut segment_info_offset = starts_in_image_len;
+    for (segment_index, page_count, segment_fixups) in &fixup_segments {
+        // Accounts for both seg_count and __PAGEZERO.
+        starts_in_image[segment_index + 2].set(LE, segment_info_offset as u32);
+        let record_len = size_of::<ChainedStartsInSegment>()
+            + CHAINED_FIXUP_PAGE_START_SIZE as usize * page_count;
+        let (record, remaining) = segment_bytes.split_at_mut(record_len);
+        segment_bytes = remaining;
+        let (starts_in_segment, rest) = from_bytes_mut::<ChainedStartsInSegment>(record)
+            .map_err(|_| error!("Invalid chained fixups starts in segment allocation"))?;
+        let (page_starts, _) = slice_from_bytes_mut::<U16<Endianness>>(rest, *page_count)
+            .map_err(|_| error!("Invalid chained fixups page starts allocation"))?;
 
-    // Accounts for both seg_count and __PAGEZERO.
-    starts_in_image[data_const_segment_index + 2].set(LE, starts_in_image_len as u32);
-
-    let (starts_in_segment, rest) = from_bytes_mut::<ChainedStartsInSegment>(rest)
-        .map_err(|_| error!("Invalid chained fixups starts in segment allocation"))?;
-    let (page_starts, rest) = slice_from_bytes_mut::<U16<Endianness>>(rest, 1)
-        .map_err(|_| error!("Invalid chained fixups page starts allocation"))?;
-    let (imports, string_pool) = slice_from_bytes_mut::<U32<Endianness>>(rest, symbols.len())
-        .map_err(|_| error!("Invalid chained fixups imports allocation"))?;
-
-    // 3) fill up DyldChainedStartsInSegment for the __got section
-    starts_in_segment.size.set(LE, starts_in_segment_len as u32);
-    starts_in_segment
-        .page_size
-        .set(LE, MACHO_PAGE_ALIGNMENT.value() as u16);
-    starts_in_segment
-        .pointer_format
-        .set(LE, DYLD_CHAINED_PTR_64_OFFSET);
-    starts_in_segment
-        .segment_offset
-        .set(LE, data_const_segment.sizes.file_offset as u64);
-    starts_in_segment.max_valid_pointer.set(LE, 0);
-    // TODO:
-    starts_in_segment.page_count.set(LE, 1);
-    page_starts[0].set(LE, 0);
-
-    // 4) fill up all imported symbols chunked by the pages
-    // TODO: support more pages
-    assert!(symbols.len() < MACHO_PAGE_ALIGNMENT.value() as usize / size_of::<u32>());
+        let segment = &active_segments[*segment_index];
+        starts_in_segment.size.set(LE, record_len as u32);
+        starts_in_segment
+            .page_size
+            .set(LE, MACHO_PAGE_ALIGNMENT.value() as u16);
+        starts_in_segment
+            .pointer_format
+            .set(LE, DYLD_CHAINED_PTR_64_OFFSET);
+        starts_in_segment.segment_offset.set(
+            LE,
+            segment
+                .sizes
+                .mem_offset
+                .checked_sub(image_base)
+                .context("fixup segment is before the image base")?,
+        );
+        starts_in_segment.max_valid_pointer.set(LE, 0);
+        starts_in_segment.page_count.set(LE, *page_count as u16);
+        page_starts.fill(U16::new(LE, u16::MAX));
+        for fixup in segment_fixups {
+            let offset_in_segment = fixup.address - segment.sizes.mem_offset;
+            let page_index = (offset_in_segment / MACHO_PAGE_ALIGNMENT.value()) as usize;
+            if page_starts[page_index].get(LE) == u16::MAX {
+                page_starts[page_index].set(
+                    LE,
+                    (offset_in_segment % MACHO_PAGE_ALIGNMENT.value()) as u16,
+                );
+            }
+        }
+        segment_info_offset += record_len;
+    }
+    ensure!(
+        segment_bytes.is_empty(),
+        "Excess starts-in-segment allocation"
+    );
 
     let sorted_symbols = &layout.format_specific.imported_symbols;
     let mut symbol_offsets = Vec::with_capacity(sorted_symbols.len());
@@ -1199,7 +1635,7 @@ fn write_chained_fixup_table(layout: &MachOLayout, chained_fixup_table: &mut [u8
         str_offset += symbol_name.len() + 1;
     }
 
-    // Emit `dyld_chained_import` that is built by 3 pieces:
+    // 4) Emit `dyld_chained_import` that is built by 3 pieces:
     // lib_ordinal: 8
     // weak_import: 1
     // name_offset: 23
@@ -1444,34 +1880,48 @@ fn write_symbols<'data>(
         };
 
         let mut value = 0;
-        let (section, symbol_type, desc) =
-            if let Some(section_index) = object.object.symbol_section(sym, sym_index)? {
-                let section_id = match &object.sections[section_index.0] {
-                    SectionSlot::Loaded(_) => object
-                        .section_part_id(section_index, &layout.symbol_db.section_part_ids)
-                        .output_section_id::<MachO>(),
-                    _ => bail!(
-                        "Tried to copy a symbol in a section we didn't load. {}",
-                        layout.symbol_debug(symbol_id)
-                    ),
-                };
-                let primary_id = layout.output_sections.primary_output_section(section_id);
-                let n_type = sym.n_type.with_type(N_SECT);
-                let n_sect = macho_section_index(layout, primary_id).with_context(|| {
-                    format!(
-                        "No Mach-O section index for {} while writing {}",
-                        primary_id,
-                        layout.symbol_debug(symbol_id)
-                    )
-                })?;
-                let n_desc = sym.n_desc.get(LE);
-                (n_sect, n_type, n_desc)
-            } else if sym.is_absolute() {
-                let n_desc = sym.n_desc.get(LE);
-                (0, sym.n_type.with_type(N_ABS), n_desc)
-            } else {
-                bail!("Attempted to output a Mach-O symtab entry with an unexpected section type")
+        let (section, symbol_type, desc) = if let Some(section_index) =
+            object.object.symbol_section(sym, sym_index)?
+        {
+            let section_id = match &object.sections[section_index.0] {
+                SectionSlot::Loaded(_) => object
+                    .section_part_id(section_index, &layout.symbol_db.section_part_ids)
+                    .output_section_id::<MachO>(),
+                _ => bail!(
+                    "Tried to copy a symbol in a section we didn't load. {}",
+                    layout.symbol_debug(symbol_id)
+                ),
             };
+            let primary_id = layout.output_sections.primary_output_section(section_id);
+            let n_type = sym.n_type.with_type(N_SECT);
+            let n_sect = macho_section_index(layout, primary_id).with_context(|| {
+                format!(
+                    "No Mach-O section index for {} while writing {}",
+                    primary_id,
+                    layout.symbol_debug(symbol_id)
+                )
+            })?;
+            let n_desc = sym.n_desc.get(LE);
+            (n_sect, n_type, n_desc)
+        } else if sym.is_absolute() {
+            let n_desc = sym.n_desc.get(LE);
+            (0, sym.n_type.with_type(N_ABS), n_desc)
+        } else if sym.as_common().is_some() {
+            let n_sect = macho_section_index(layout, crate::macho::output_section_id::BSS)
+                .context("No Mach-O section index for common symbols")?;
+            (n_sect, sym.n_type.with_type(N_SECT), Default::default())
+        } else if sym.is_undefined() {
+            let n_desc = sym.n_desc.get(LE);
+            (0, sym.n_type.with_type(N_UNDF), n_desc)
+        } else {
+            bail!(
+                "Attempted to output Mach-O symbol {} with unexpected n_type {:#x}, n_sect {}, n_value {:#x}",
+                String::from_utf8_lossy(info.name),
+                sym.n_type,
+                sym.n_sect,
+                sym.n_value.get(LE),
+            )
+        };
 
         if let Some(res) = layout.local_symbol_resolution(symbol_id) {
             value = res.value_for_symbol_table();

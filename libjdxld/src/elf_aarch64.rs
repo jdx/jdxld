@@ -396,6 +396,7 @@ impl crate::platform::Arch for ElfAArch64 {
             },
             min_branch_range: MIN_BRANCH_RANGE,
             thunk_size: THUNK_TEMPLATE.len() as u64,
+            conservative: false,
         })
     }
 

@@ -1,9 +1,11 @@
 // TODO
 #![allow(unused_variables)]
 
+use crate::alignment::Alignment;
 use crate::bail;
 use crate::ensure;
 use crate::macho::MachO;
+use crate::macho::output_section_id;
 use crate::platform::PreviousRelocationInfo;
 use linker_utils::aarch64::RelaxationKind;
 use linker_utils::elf::AArch64Instruction;
@@ -25,6 +27,15 @@ const STUB_TEMPLATE: &[u8] = &[
     0x10, 0x02, 0x40, 0xf9, // LDR  x16, [x16, #off]
     0x00, 0x02, 0x1f, 0xd6, // BR   x16
 ];
+
+// ADRP+ADD+BR range-extension thunk template.
+const THUNK_TEMPLATE: &[u8] = &[
+    0x10, 0x00, 0x00, 0x90, // ADRP x16, page(target)
+    0x10, 0x02, 0x00, 0x91, // ADD  x16, x16, #off
+    0x00, 0x02, 0x1f, 0xd6, // BR   x16
+];
+
+const MIN_BRANCH_RANGE: u64 = 128 * 1024 * 1024;
 
 const _ASSERTS: () = {
     assert!(STUB_TEMPLATE.len() as u64 == crate::macho::PLT_ENTRY_SIZE);
@@ -183,7 +194,7 @@ impl crate::platform::Arch for MachOAArch64 {
             mask,
             range,
             size,
-            thunkable: false,
+            thunkable: rel.r_type == object::macho::ARM64_RELOC_BRANCH26,
         })
     }
 
@@ -219,6 +230,32 @@ impl crate::platform::Arch for MachOAArch64 {
         offset_in_section: u64,
     ) -> crate::error::Result<crate::platform::SourceInfo> {
         Ok(crate::platform::SourceInfo(None))
+    }
+
+    fn thunk_config() -> Option<crate::platform::ThunkConfig> {
+        Some(crate::platform::ThunkConfig {
+            primary_function_part_id: const {
+                output_section_id::TEXT.part_id_with_alignment::<MachO>(Alignment { exponent: 2 })
+            },
+            min_branch_range: MIN_BRANCH_RANGE,
+            thunk_size: THUNK_TEMPLATE.len() as u64,
+            conservative: true,
+        })
+    }
+
+    fn write_thunk(thunk_address: u64, target_address: u64, buf: &mut [u8]) {
+        buf.copy_from_slice(THUNK_TEMPLATE);
+
+        let thunk_page = thunk_address & !PAGE_MASK_4KB;
+        let target_page = target_address & !PAGE_MASK_4KB;
+        let page_diff = (target_page as i64).wrapping_sub(thunk_page as i64);
+        let page_count = (page_diff / SIZE_4KB as i64) as u64 & 0x1f_ffff;
+        AArch64Instruction::Adr.write_to_value(page_count, false, &mut buf[0..4]);
+        AArch64Instruction::Add.write_to_value(
+            target_address & PAGE_MASK_4KB,
+            false,
+            &mut buf[4..8],
+        );
     }
 
     fn new_relaxation(

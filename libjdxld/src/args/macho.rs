@@ -243,6 +243,26 @@ fn setup_argument_parser() -> ArgumentParser<MachOArgs> {
         });
     parser
         .declare_with_param()
+        .long("framework")
+        .help("Link with a macOS framework")
+        .execute(|args, modifier_stack, value| {
+            let sysroot = args
+                .sysroot
+                .as_deref()
+                .context("-framework requires -syslibroot")?;
+            let framework = sysroot
+                .join("System/Library/Frameworks")
+                .join(format!("{value}.framework"))
+                .join(format!("{value}.tbd"));
+            args.common_mut().inputs.push(Input {
+                spec: InputSpec::File(framework.into_boxed_path()),
+                search_first: None,
+                modifiers: *modifier_stack.last().unwrap(),
+            });
+            Ok(())
+        });
+    parser
+        .declare_with_param()
         .long("lto_library")
         .help("Load plugin")
         .execute(|args, _modifier_stack, value| {
@@ -372,6 +392,8 @@ mod tests {
         "-demangle",
         "-syslibroot",
         "/foo/bar",
+        "-framework",
+        "Security",
         "-mllvm",
         "-enable-linkonceodr-outlining",
         "-o",
@@ -402,6 +424,15 @@ mod tests {
         assert!(args.common.inputs.iter().any(|i| match &i.spec {
             InputSpec::Lib(f) => f.as_ref() == "c++",
             InputSpec::File(_) | InputSpec::Search(_) => false,
+        }));
+        assert!(args.common.inputs.iter().any(|i| match &i.spec {
+            InputSpec::File(f) => {
+                f.as_ref()
+                    == Path::new(
+                        "/foo/bar/System/Library/Frameworks/Security.framework/Security.tbd",
+                    )
+            }
+            InputSpec::Lib(_) | InputSpec::Search(_) => false,
         }));
         assert!(
             args.lib_search_path

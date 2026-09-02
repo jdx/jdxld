@@ -109,10 +109,6 @@ pub fn parse_defined_library<'data>(input: &'data str) -> Result<DefinedStubLibr
         targets = main_library.targets,
     );
 
-    ensure!(
-        !main_library.current_version.is_empty(),
-        "Missing library version of the main library"
-    );
     let mut defined_library = DefinedStubLibrary {
         install_name: main_library.install_name,
         current_version: main_library.current_version,
@@ -247,5 +243,23 @@ reexports:
                 "_b_weak_exported_arm64"
             ]
         );
+    }
+
+    #[test]
+    fn parse_library_without_current_version() {
+        let stub_library = parse_defined_library(
+            r"--- !tapi-tbd
+tbd-version:     4
+targets:         [ arm64e-macos ]
+install-name:    '/System/Library/Frameworks/Example.framework/Example'
+exports:
+  - targets:     [ arm64e-macos ]
+    symbols:     [ _example ]
+",
+        )
+        .expect("definition without an optional current version should parse");
+
+        assert_eq!(stub_library.current_version, "");
+        assert_eq!(stub_library.symbols, ["_example"]);
     }
 }
