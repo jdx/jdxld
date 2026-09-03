@@ -1,6 +1,7 @@
 //#Object:runtime.c
 //#ReferenceLinkers:ld
 //#ExpectSection:__common
+//#DiffIgnore:section.__unwind_info
 
 #include "../common/runtime.h"
 

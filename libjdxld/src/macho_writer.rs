@@ -66,6 +66,7 @@ use crate::platform::Arch;
 use crate::platform::Args;
 use crate::platform::ObjectFile;
 use crate::platform::Relaxation;
+use crate::platform::SectionAttributes as _;
 use crate::platform::Symbol;
 use crate::resolution::SectionSlot;
 use crate::symbol_db::SymbolId;
@@ -489,6 +490,13 @@ fn populate_file_header(
     header: &mut FileHeader,
 ) {
     let load_commands_info = layout.section_layouts.get(LOAD_COMMANDS);
+    let has_tlv_descriptors = layout
+        .output_sections
+        .ids_with_info()
+        .any(|(section_id, info)| {
+            info.section_attributes.ty() == macho::S_THREAD_LOCAL_VARIABLES
+                && layout.section_layouts.get(section_id).mem_size != 0
+        });
 
     header.magic.set(BigEndian, MH_CIGAM_64);
     header.cputype.set(LE, CPU_TYPE_ARM64);
@@ -500,14 +508,11 @@ fn populate_file_header(
     header
         .sizeofcmds
         .set(LE, load_commands_info.file_size as u32);
-    header.flags.set(
-        LE,
-        macho::MH_PIE
-            | macho::MH_DYLDLINK
-            | macho::MH_NOUNDEFS
-            | macho::MH_TWOLEVEL
-            | macho::MH_HAS_TLV_DESCRIPTORS,
-    );
+    let mut flags = macho::MH_PIE | macho::MH_DYLDLINK | macho::MH_NOUNDEFS | macho::MH_TWOLEVEL;
+    if has_tlv_descriptors {
+        flags |= macho::MH_HAS_TLV_DESCRIPTORS;
+    }
+    header.flags.set(LE, flags);
     header.reserved.set(LE, 0);
 }
 
@@ -1334,8 +1339,7 @@ fn collect_chained_fixups(layout: &MachOLayout<'_>, output: &[u8]) -> Result<Vec
                     }
 
                     let address = section_address + offset;
-                    let Some((segment_index, file_offset)) = fixup_location(layout, address)?
-                    else {
+                    let Some((segment_index, file_offset)) = fixup_location(layout, address) else {
                         continue;
                     };
                     let bytes = output
@@ -1378,7 +1382,7 @@ fn collect_chained_fixups(layout: &MachOLayout<'_>, output: &[u8]) -> Result<Vec
 
     for (ordinal, symbol) in layout.format_specific.imported_symbols.iter().enumerate() {
         let address = symbol.got_address.get();
-        let (segment_index, file_offset) = fixup_location(layout, address)?
+        let (segment_index, file_offset) = fixup_location(layout, address)
             .context("imported GOT entry is outside a writable segment")?;
         fixups.push(ChainedFixup {
             segment_index,
@@ -1392,7 +1396,7 @@ fn collect_chained_fixups(layout: &MachOLayout<'_>, output: &[u8]) -> Result<Vec
     }
     for entry in &layout.format_specific.local_got_entries {
         let address = entry.got_address.get();
-        let (segment_index, file_offset) = fixup_location(layout, address)?
+        let (segment_index, file_offset) = fixup_location(layout, address)
             .context("local GOT entry is outside a writable segment")?;
         fixups.push(ChainedFixup {
             segment_index,
@@ -1405,22 +1409,22 @@ fn collect_chained_fixups(layout: &MachOLayout<'_>, output: &[u8]) -> Result<Vec
     fixups.sort_unstable_by_key(|fixup| (fixup.segment_index, fixup.address));
     let mut deduplicated: Vec<ChainedFixup> = Vec::with_capacity(fixups.len());
     for fixup in fixups {
-        if let Some(previous) = deduplicated.last() {
-            if previous.address == fixup.address {
-                ensure!(
-                    *previous == fixup,
-                    "conflicting chained fixups at {:#x}",
-                    fixup.address
-                );
-                continue;
-            }
+        if let Some(previous) = deduplicated.last()
+            && previous.address == fixup.address
+        {
+            ensure!(
+                *previous == fixup,
+                "conflicting chained fixups at {:#x}",
+                fixup.address
+            );
+            continue;
         }
         deduplicated.push(fixup);
     }
     Ok(deduplicated)
 }
 
-fn fixup_location(layout: &MachOLayout<'_>, address: u64) -> Result<Option<(usize, usize)>> {
+fn fixup_location(layout: &MachOLayout<'_>, address: u64) -> Option<(usize, usize)> {
     for (segment_index, segment) in layout.segment_layouts.segments.iter().enumerate() {
         let segment_end = segment.sizes.mem_offset + segment.sizes.file_size as u64;
         if address < segment.sizes.mem_offset || address + 8 > segment_end {
@@ -1428,15 +1432,12 @@ fn fixup_location(layout: &MachOLayout<'_>, address: u64) -> Result<Option<(usiz
         }
         let segment_name = layout.program_segments.segment_def(segment.id).name;
         if !segment_name.is_writable() {
-            return Ok(None);
+            return None;
         }
         let offset_in_segment = (address - segment.sizes.mem_offset) as usize;
-        return Ok(Some((
-            segment_index,
-            segment.sizes.file_offset + offset_in_segment,
-        )));
+        return Some((segment_index, segment.sizes.file_offset + offset_in_segment));
     }
-    Ok(None)
+    None
 }
 
 fn apply_chained_fixups(

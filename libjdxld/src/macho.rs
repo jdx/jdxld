@@ -704,10 +704,18 @@ impl platform::Symbol for SymtabEntry {
             return None;
         }
 
+        let size = self.n_value.get(LE);
+        let encoded_alignment = ((self.n_desc.get(LE).0 >> 8) & 0xf) as u8;
         let alignment = Alignment {
-            exponent: ((self.n_desc.get(LE).0 >> 8) & 0xf) as u8,
+            exponent: if encoded_alignment == 0 {
+                // Mach-O uses natural alignment (the next power of two of the size), capped at
+                // 2^15 for normal outputs, when the common alignment is not encoded in n_desc.
+                size.min(1 << 15).next_power_of_two().trailing_zeros() as u8
+            } else {
+                encoded_alignment
+            },
         };
-        let size = alignment.align_up(self.n_value.get(LE));
+        let size = alignment.align_up(size);
         Some(platform::CommonSymbol {
             size,
             part_id: output_section_id::BSS.part_id_with_alignment::<MachO>(alignment),
