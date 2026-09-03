@@ -76,6 +76,21 @@ pub(crate) fn build_with_topology(symbols: &[Symbol<'_>], topology: &Topology) -
     builder.encode()
 }
 
+pub(crate) fn size_with_topology(symbols: &[Symbol<'_>], topology: &Topology) -> usize {
+    if symbols.is_empty() {
+        return 0;
+    }
+
+    let mut builder = Builder {
+        symbols,
+        nodes: Vec::with_capacity(topology.nodes.len()),
+        edges: Vec::with_capacity(symbols.len()),
+    };
+    builder.build_nodes_from_topology(topology);
+    builder.layout_until_stable();
+    builder.encoded_size()
+}
+
 struct Builder<'data, 'symbols> {
     symbols: &'symbols [Symbol<'data>],
     nodes: Vec<Node>,
@@ -84,6 +99,11 @@ struct Builder<'data, 'symbols> {
 
 impl Topology {
     pub(crate) fn new(symbols: &[Symbol<'_>]) -> Self {
+        debug_assert!(
+            symbols.windows(2).all(|w| w[0].name < w[1].name),
+            "Mach-O export symbol names are not sorted or contain duplicates"
+        );
+
         let mut uncompressed = vec![UncompressedNode::default()];
         let mut previous_name = &[][..];
         let mut previous_path = vec![0];
@@ -234,7 +254,7 @@ impl<'data> Builder<'data, '_> {
     }
 
     fn encode(&self) -> Vec<u8> {
-        let total_size = self.nodes.last().map_or(0, |node| node.offset + node.size);
+        let total_size = self.encoded_size();
         let mut out = Vec::with_capacity(total_size);
 
         for (node_index, node) in self.nodes.iter().enumerate() {
@@ -258,6 +278,10 @@ impl<'data> Builder<'data, '_> {
 
         debug_assert_eq!(out.len(), total_size);
         out
+    }
+
+    fn encoded_size(&self) -> usize {
+        self.nodes.last().map_or(0, |node| node.offset + node.size)
     }
 
     fn node_edges(&self, node_index: usize) -> impl Iterator<Item = &Edge<'data>> {
@@ -477,6 +501,7 @@ mod tests {
 
         let maximum_trie = build(&mut maximum);
         let topology = Topology::new(&maximum);
+        assert_eq!(size_with_topology(&maximum, &topology), maximum_trie.len());
         actual.sort_unstable_by(|a, b| a.name.cmp(b.name));
         let actual_trie = build_with_topology(&actual, &topology);
 

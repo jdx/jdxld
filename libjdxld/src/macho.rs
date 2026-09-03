@@ -1606,7 +1606,7 @@ impl platform::Platform for MachO {
             .collect_vec();
 
         let topology = crate::trie::Topology::new(&exports);
-        let exports_size = crate::trie::build_with_topology(&exports, &topology).len() as u64;
+        let exports_size = crate::trie::size_with_topology(&exports, &topology) as u64;
         state.export_trie_topology = Some(topology);
         mem_sizes.increment(part_id::EXPORTS_TRIE, exports_size);
     }
