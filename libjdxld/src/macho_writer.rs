@@ -325,7 +325,7 @@ fn build_exports_trie(layout: &MachOLayout<'_>) -> Result<Vec<u8>> {
 
     let image_base = text_segment.sizes.mem_offset;
 
-    let mut symbols = layout
+    let symbols = layout
         .dynamic_symbol_definitions
         .iter()
         .filter_map(|symbol| {
@@ -378,7 +378,7 @@ fn build_exports_trie(layout: &MachOLayout<'_>) -> Result<Vec<u8>> {
         })
         .collect::<Result<Vec<_>>>()?;
 
-    Ok(crate::trie::build(&mut symbols))
+    Ok(crate::trie::build_sorted(&symbols))
 }
 
 fn exported_symbol_is_weak(layout: &MachOLayout<'_>, symbol_id: SymbolId) -> Result<bool> {

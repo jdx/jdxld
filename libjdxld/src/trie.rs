@@ -35,16 +35,21 @@ struct UncompressedNode {
     children: Vec<usize>,
 }
 
-/// Build a Mach-O exports trie for `symbols`. `symbols` is sorted in place.
-pub(crate) fn build(symbols: &mut [Symbol<'_>]) -> Vec<u8> {
+#[cfg(test)]
+fn build(symbols: &mut [Symbol<'_>]) -> Vec<u8> {
+    symbols.sort_unstable_by(|a, b| a.name.cmp(b.name));
+    build_sorted(symbols)
+}
+
+/// Build a Mach-O exports trie for symbols that are already sorted by name.
+pub(crate) fn build_sorted(symbols: &[Symbol<'_>]) -> Vec<u8> {
     if symbols.is_empty() {
         return Vec::new();
     }
 
-    symbols.sort_unstable_by(|a, b| a.name.cmp(b.name));
     debug_assert!(
-        symbols.windows(2).all(|w| w[0].name != w[1].name),
-        "duplicate Mach-O export symbol names"
+        symbols.windows(2).all(|w| w[0].name < w[1].name),
+        "Mach-O export symbol names are not sorted or contain duplicates"
     );
 
     let mut builder = Builder {
@@ -261,6 +266,7 @@ mod tests {
 
     fn check(symbols: &mut [Symbol]) {
         let trie = build(symbols);
+        assert_eq!(trie, build_sorted(symbols));
 
         assert_eq!(
             parse_exports(&trie),

@@ -76,6 +76,7 @@ use object::read::macho::MachHeader;
 use object::read::macho::Nlist;
 use object::read::macho::Section;
 use object::read::macho::Segment;
+use rayon::slice::ParallelSliceMut;
 use std::borrow::Cow;
 use std::num::NonZeroU8;
 use std::num::NonZeroU64;
@@ -1518,10 +1519,14 @@ impl platform::Platform for MachO {
     fn new_epilogue_layout<'data>(
         _args: &Self::Args,
         _output_kind: crate::output_kind::OutputKind,
-        _dynamic_symbol_definitions: &mut [crate::layout::DynamicSymbolDefinition<'data, Self>],
+        dynamic_symbol_definitions: &mut [crate::layout::DynamicSymbolDefinition<'data, Self>],
         group_states: &[layout::GroupState<'data, Self>],
     ) -> Self::EpilogueLayoutExt {
         verbose_timing_phase!("Gather imported symbol IDs");
+
+        // Trie sizing and final encoding both preserve this order, so sort the long Rust symbol
+        // names once rather than independently in each phase.
+        dynamic_symbol_definitions.par_sort_unstable_by(|a, b| a.name.cmp(b.name));
 
         let imported_symbols = group_states
             .iter()
@@ -1588,7 +1593,7 @@ impl platform::Platform for MachO {
         // work around this for now by assuming all addresses will be u64::MAX. This gives us an
         // upper bound on how large the trie will be, but wastes some space in the file. TODO:
         // Figure out a good way to fix this.
-        let mut exports = dynamic_symbol_definitions
+        let exports = dynamic_symbol_definitions
             .iter()
             .map(|symbol| crate::trie::Symbol {
                 name: symbol.name,
@@ -1599,7 +1604,7 @@ impl platform::Platform for MachO {
 
         mem_sizes.increment(
             part_id::EXPORTS_TRIE,
-            crate::trie::build(&mut exports).len() as u64,
+            crate::trie::build_sorted(&exports).len() as u64,
         );
     }
 
