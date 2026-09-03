@@ -143,20 +143,32 @@ fn handle_request(
         }));
         args.parse(get_arguments)?;
         libjdxld::run_with_file_system(args, file_system.clone())?;
-        if let Some(state_root) = state_root
-            && let Err(error) = crate::persistent_state::record(
+        if let Some(state_root) = state_root {
+            let recorded = file_system.recorded_inputs();
+            let resolved = match crate::digest_helper::resolve(recorded.clone()) {
+                Ok(resolved) => resolved,
+                Err(error) => {
+                    use std::fmt::Write as _;
+                    let _ = writeln!(
+                        state_warning_output.lock().unwrap(),
+                        "jdxld: warning: persistent input digests were not recorded: {error:?}"
+                    );
+                    crate::digest_helper::without_digests(recorded)
+                }
+            };
+            if let Err(error) = crate::persistent_state::record(
                 state_root,
                 &cwd,
                 &arguments,
                 super::VERSION,
-                file_system.recorded_inputs(),
-            )
-        {
-            use std::fmt::Write as _;
-            let _ = writeln!(
-                state_warning_output.lock().unwrap(),
-                "jdxld: warning: persistent link state was not recorded: {error:?}"
-            );
+                resolved,
+            ) {
+                use std::fmt::Write as _;
+                let _ = writeln!(
+                    state_warning_output.lock().unwrap(),
+                    "jdxld: warning: persistent link state was not recorded: {error:?}"
+                );
+            }
         }
         Ok(())
     });

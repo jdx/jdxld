@@ -1,7 +1,8 @@
 //! Advisory, crash-safe state recorded after a successful worker link.
 //!
-//! This first format deliberately cannot authorize incremental output reuse. Input identities are
-//! metadata observations rather than content digests, so the linker still performs a full link.
+//! This format records content digests supplied by the owning build session when available, but
+//! deliberately cannot authorize incremental output reuse: no parsed metadata or output ranges are
+//! restored yet, so the linker still performs a full link.
 
 use libjdxld::CachedInputIdentity;
 use libjdxld::error::Context as _;
@@ -36,6 +37,12 @@ struct InputIdentity {
     path: Vec<u8>,
     modified_nanos: u128,
     len: u64,
+    content_digest: Option<[u8; 32]>,
+}
+
+pub(crate) struct ResolvedInput {
+    pub(crate) identity: CachedInputIdentity,
+    pub(crate) content_digest: Option<[u8; 32]>,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -52,11 +59,11 @@ pub(crate) fn record(
     cwd: &Path,
     arguments: &[String],
     linker_version: &str,
-    inputs: Vec<CachedInputIdentity>,
+    inputs: Vec<ResolvedInput>,
 ) -> Result<StateObservation> {
     let input_paths = inputs
         .iter()
-        .map(|input| input.path.as_path())
+        .map(|input| input.identity.path.as_path())
         .collect::<BTreeSet<_>>();
     let structure_digest = structure_digest(cwd, arguments, &input_paths);
     let identity_digest = output_path(cwd, arguments).map_or(structure_digest, |output| {
@@ -224,36 +231,60 @@ fn compare(previous: Option<&Manifest>, current: &[InputIdentity]) -> StateObser
         .iter()
         .map(|input| (input.path.as_slice(), input))
         .collect::<BTreeMap<_, _>>();
-    let new = current
-        .iter()
-        .map(|input| (input.path.as_slice(), input))
-        .collect::<BTreeMap<_, _>>();
     let mut observation = StateObservation {
         previous_generation: Some(previous.generation),
         ..StateObservation::default()
     };
-    for (path, identity) in &new {
-        match old.get(path) {
-            Some(old) if **old == **identity => observation.unchanged += 1,
-            Some(_) => observation.changed += 1,
-            None => observation.added += 1,
+    let mut matched_old_paths = BTreeSet::new();
+    let mut unmatched_current = Vec::new();
+    for identity in current {
+        if let Some(old) = old.get(identity.path.as_slice()) {
+            matched_old_paths.insert(old.path.clone());
+            if same_contents(old, identity) {
+                observation.unchanged += 1;
+            } else {
+                observation.changed += 1;
+            }
+        } else {
+            unmatched_current.push(identity);
         }
     }
-    observation.removed = old.keys().filter(|path| !new.contains_key(*path)).count();
+    for identity in unmatched_current {
+        if let Some((_, old)) = old.iter().find(|(_, old)| {
+            !matched_old_paths.contains(&old.path)
+                && old.content_digest.is_some()
+                && old.content_digest == identity.content_digest
+        }) {
+            matched_old_paths.insert(old.path.clone());
+            observation.unchanged += 1;
+        } else {
+            observation.added += 1;
+        }
+    }
+    observation.removed = old.len().saturating_sub(matched_old_paths.len());
     observation
 }
 
-impl From<CachedInputIdentity> for InputIdentity {
-    fn from(input: CachedInputIdentity) -> Self {
+fn same_contents(old: &InputIdentity, current: &InputIdentity) -> bool {
+    match (old.content_digest, current.content_digest) {
+        (Some(old), Some(current)) => old == current,
+        _ => old.modified_nanos == current.modified_nanos && old.len == current.len,
+    }
+}
+
+impl From<ResolvedInput> for InputIdentity {
+    fn from(input: ResolvedInput) -> Self {
         let modified_nanos = input
+            .identity
             .modification_time
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
         Self {
-            path: input.path.into_os_string().into_encoded_bytes(),
+            path: input.identity.path.into_os_string().into_encoded_bytes(),
             modified_nanos,
-            len: input.len,
+            len: input.identity.len,
+            content_digest: input.content_digest,
         }
     }
 }
@@ -263,11 +294,14 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
-    fn input(path: &str, revision: u64) -> CachedInputIdentity {
-        CachedInputIdentity {
-            path: PathBuf::from(path),
-            modification_time: UNIX_EPOCH + Duration::from_secs(revision),
-            len: revision,
+    fn input(path: &str, revision: u64) -> ResolvedInput {
+        ResolvedInput {
+            identity: CachedInputIdentity {
+                path: PathBuf::from(path),
+                modification_time: UNIX_EPOCH + Duration::from_secs(revision),
+                len: revision,
+            },
+            content_digest: Some(*blake3::hash(&revision.to_le_bytes()).as_bytes()),
         }
     }
 
@@ -326,10 +360,10 @@ mod tests {
             second,
             StateObservation {
                 previous_generation: Some(1),
-                unchanged: 1,
+                unchanged: 2,
                 changed: 1,
-                added: 2,
-                removed: 1,
+                added: 1,
+                removed: 0,
             }
         );
     }
