@@ -4,14 +4,14 @@ members = [
   "linker-layout",
   "linker-trace",
   "linker-utils",
-  "wild",
-  "libwild",
+  "jdxld",
+  "libjdxld",
   "benchmarks/runner",
 ]
 resolver = "2"
 
 [workspace.package]
-repository = "https://github.com/wild-linker/wild"
+repository = "https://github.com/jdx/jdxld"
 license = "MIT OR Apache-2.0"
 version = "0.10.0"
 readme = "README.md"

@@ -216,7 +216,7 @@ pub(crate) fn check_macho_linkedit_alignment(report: &mut Report, objects: &[cra
 
 pub(crate) fn report_section_diffs(report: &mut Report, objects: &[Binary]) {
     // Find section names defined by our first reference object. We ignore empty sections though,
-    // since Wild will output empty sections if they have start/stop symbols that are referenced.
+    // since jdxld will output empty sections if they have start/stop symbols that are referenced.
     let mut common_names: HashSet<&[u8]> = objects[1]
         .sections_by_name
         .iter()

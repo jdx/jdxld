@@ -4,8 +4,8 @@
 //! references to symbols that are in different locations in the different binaries. A high level
 //! output of how this works follows.
 //!
-//! We depend on Wild's binary output having a corresponding .layout file. This allows us to know
-//! all the input sections that Wild put into the binary and where it put them.
+//! We depend on jdxld's binary output having a corresponding .layout file. This allows us to know
+//! all the input sections that jdxld put into the binary and where it put them.
 //!
 //! We then start by looking for symbols that have exactly one definition in each binary. We can
 //! then tie the input section that defined that symbol to its corresponding location in all of the
@@ -1757,8 +1757,8 @@ impl<R: RType> DynamicRelocation<'_, R> {
         // dynamic symbols.
         out.entry.is_weak = false;
 
-        // Wild currently seems to set undefined dynamic symbols as STT_IFUNC if they resolved to an
-        // IFUNC in a shared object. Other linkers don't. TODO: Fix this.
+        // jdxld currently seems to set undefined dynamic symbols as STT_IFUNC if they resolved to
+        // an IFUNC in a shared object. Other linkers don't. TODO: Fix this.
         out.entry.is_ifunc = false;
 
         out
@@ -2405,7 +2405,7 @@ impl<'data> RelaxationTester<'data> {
                                 // rather than just the symbol name.
                                 //
                                 // When `thunk_target == expected_value` the thunk jumps
-                                // directly to the ifunc symbol address (e.g. wild's IPLT
+                                // directly to the ifunc symbol address (e.g. jdxld's IPLT
                                 // entry equals the ifunc symbol value). We still try to
                                 // follow the chain so the display is uniform with lld.
                                 if let Ok(Some(got_address)) =

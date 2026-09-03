@@ -1,7 +1,7 @@
 # Run on a recent version of Fedora
 #
-# docker build --progress=plain -t wild-dev-fedora . -f docker/fedora.Dockerfile
-# docker run -it wild-dev-fedora
+# docker build --progress=plain -t jdxld-dev-fedora . -f docker/fedora.Dockerfile
+# docker run -it jdxld-dev-fedora
 
 FROM fedora:44 AS chef
 RUN dnf -y update && \
@@ -39,13 +39,13 @@ RUN rustup toolchain install nightly && \
         && \
     rustup component add rustc-codegen-cranelift-preview --toolchain nightly
 RUN cargo install --locked cargo-chef
-WORKDIR /wild
+WORKDIR /jdxld
 
 FROM chef AS planner
 COPY . .
 RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
-COPY --from=planner /wild/recipe.json recipe.json
+COPY --from=planner /jdxld/recipe.json recipe.json
 RUN cargo chef cook --all-targets --recipe-path recipe.json
 COPY . .

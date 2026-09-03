@@ -1,1 +1,1 @@
-../target/debug/wild
+../target/debug/jdxld

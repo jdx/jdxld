@@ -20,7 +20,7 @@ pub(crate) struct Config {
 pub(crate) struct BenchConfig {
     #[serde(default)]
     pub(crate) skip: bool,
-    pub(crate) min_wild_version: Option<String>,
+    pub(crate) min_jdxld_version: Option<String>,
     #[serde(default)]
     pub(crate) skip_linkers: Vec<LinkerKind>,
 }

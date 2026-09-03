@@ -1,15 +1,15 @@
-//! An over-engineered, opinionated tool for benchmarking linkers, in particular Wild.
+//! An over-engineered, opinionated tool for benchmarking linkers, in particular jdxld.
 //!
-//! Things that make this specific to linkers and/or wild.
+//! Things that make this specific to linkers and/or jdxld.
 //!
-//! * It assumes benchmarks are in the form of Wild-generated save-dirs. i.e. a directory (the name
+//! * It assumes benchmarks are in the form of jdxld-generated save-dirs. i.e. a directory (the name
 //!   of which is the name of the benchmark) where that directory contains a rust-with script.
 //! * It accommodates that some of the linkers fork on startup, then do shutdown work after the
 //!   linker terminates. To prevent this from affecting subsequent runs, it inserts a delay based on
 //!   how long the linker took to run.
 //! * It handles querying the linkers for their version to include in the report.
 //! * It allows per-benchmark configuration files that can specify things like the minimum supported
-//!   version of wild that can run that benchmark or skipping particular linkers for particular
+//!   version of jdxld that can run that benchmark or skipping particular linkers for particular
 //!   benchmarks.
 //! * Passing --no-fork to linkers that support it when measuring memory consumption.
 //!
@@ -195,8 +195,8 @@ struct LinkerIdentifier {
     kind: LinkerKind,
     version: String,
     variant: Option<String>,
-    /// The commit hash of the linker. Set for Wild when the path to the linker doesn't include the
-    /// version number. i.e. when we've concluded that this isn't a release version.
+    /// The commit hash of the linker. Set for jdxld when the path to the linker doesn't include
+    /// the version number. i.e. when we've concluded that this isn't a release version.
     hash: Option<String>,
     /// If we've got has, then this is one patch level higher than version.
     effective_version: Vec<u32>,
@@ -205,7 +205,7 @@ struct LinkerIdentifier {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum LinkerKind {
-    Wild,
+    Jdxld,
     Lld,
     Mold,
     Bfd,
@@ -221,7 +221,7 @@ struct Benchmark {
 impl LinkerKind {
     fn as_str(self) -> &'static str {
         match self {
-            LinkerKind::Wild => "Wild",
+            LinkerKind::Jdxld => "jdxld",
             LinkerKind::Lld => "LLD",
             LinkerKind::Mold => "Mold",
             LinkerKind::Bfd => "GNU ld",
@@ -230,7 +230,7 @@ impl LinkerKind {
 
     fn supports_arg(&self, arg: &str) -> bool {
         match arg {
-            "--no-fork" => matches!(self, LinkerKind::Wild | LinkerKind::Mold),
+            "--no-fork" => matches!(self, LinkerKind::Jdxld | LinkerKind::Mold),
             _ => true,
         }
     }
@@ -290,25 +290,25 @@ impl Benchmark {
         })
     }
 
-    fn supports_wild_version(&self, wild_version: &[u32]) -> bool {
+    fn supports_jdxld_version(&self, jdxld_version: &[u32]) -> bool {
         let Some(min_required) = self
             .config
-            .min_wild_version
+            .min_jdxld_version
             .as_ref()
             .and_then(|v| crate::parse_version_number(v).ok())
         else {
             return true;
         };
 
-        wild_version >= &min_required
+        jdxld_version >= &min_required
     }
 
     fn supports_bin(&self, bin: &Bin) -> bool {
         if self.config.skip_linkers.contains(&bin.identifier.kind) {
             return false;
         }
-        if bin.identifier.kind == LinkerKind::Wild {
-            return self.supports_wild_version(&bin.identifier.effective_version);
+        if bin.identifier.kind == LinkerKind::Jdxld {
+            return self.supports_jdxld_version(&bin.identifier.effective_version);
         }
         true
     }
@@ -321,18 +321,18 @@ impl LinkerIdentifier {
         let mut hash = None;
         let mut variant = None;
 
-        if let Some(mut rest) = version_line.strip_prefix("Wild ") {
+        if let Some(mut rest) = version_line.strip_prefix("jdxld ") {
             if let Some(r) = rest.strip_prefix("version ") {
                 rest = r;
             }
             version = take_word(&mut rest)?.to_owned();
             if !bin_path.to_string_lossy().contains(&version) {
-                // For wild, we only consider the version to be true if the path to the linker
+                // For jdxld, we only consider the version to be true if the path to the linker
                 // contains the version number, otherwise we use the git hash.
                 hash = take_word(&mut rest).map(|w| w.replace(['(', ')'], ""));
             }
 
-            kind = LinkerKind::Wild;
+            kind = LinkerKind::Jdxld;
         } else if let Some(mut rest) = version_line.strip_prefix("LLD ") {
             kind = LinkerKind::Lld;
             version = take_word(&mut rest)?.to_owned();

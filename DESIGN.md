@@ -1,6 +1,6 @@
 # Design
 
-This document provides a high level overview of Wild's design. The intent is to not go into too much
+This document provides a high level overview of jdxld's design. The intent is to not go into too much
 detail, otherwise we increase the risk that it'll get out-of-sync with the code. For full details,
 see comments in the code and the code itself.
 
@@ -40,6 +40,6 @@ phases run quickly enough.
 
 Most testing is done by `integration_tests.rs`. This compiles various programs that are written in
 C, C++, Rust and assembly. It then links them with our reference linkers - GNU ld and in some cases
-also LLD. It links them with Wild and compares the resulting binaries using our own custom diff
+also LLD. It links them with jdxld and compares the resulting binaries using our own custom diff
 tool, `linker-diff`. Provided that succeeds, it then executes all the linked programs and checks
 that they give the correct answer.

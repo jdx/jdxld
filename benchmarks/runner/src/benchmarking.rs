@@ -32,7 +32,7 @@ pub(crate) fn run_bench(args: &BenchArgs, config: &Config) -> Result {
 
     let benchmarks = find_benchmarks(args, config)?;
 
-    let benchmarks = filter_benchmarks_by_wild_version(benchmarks, &bins);
+    let benchmarks = filter_benchmarks_by_jdxld_version(benchmarks, &bins);
 
     println!("Binaries:");
     for bin in &bins {
@@ -274,11 +274,11 @@ fn find_benchmarks(args: &BenchArgs, config: &Config) -> Result<Vec<Benchmark>> 
     Ok(benchmarks)
 }
 
-/// Filter benchmarks to just those that have at least one supported Wild version.
-fn filter_benchmarks_by_wild_version(benchmarks: Vec<Benchmark>, bins: &[Bin]) -> Vec<Benchmark> {
-    let Some(maximum_wild_version) = bins
+/// Filter benchmarks to just those that have at least one supported jdxld version.
+fn filter_benchmarks_by_jdxld_version(benchmarks: Vec<Benchmark>, bins: &[Bin]) -> Vec<Benchmark> {
+    let Some(maximum_jdxld_version) = bins
         .iter()
-        .filter(|&bin| bin.identifier.kind == LinkerKind::Wild)
+        .filter(|&bin| bin.identifier.kind == LinkerKind::Jdxld)
         .map(|bin| &bin.identifier.effective_version)
         .max()
     else {
@@ -288,7 +288,7 @@ fn filter_benchmarks_by_wild_version(benchmarks: Vec<Benchmark>, bins: &[Bin]) -
     benchmarks
         .into_iter()
         .filter(|bench| {
-            if !bench.supports_wild_version(maximum_wild_version) {
+            if !bench.supports_jdxld_version(maximum_jdxld_version) {
                 println!("Skipping benchmark {bench} due to minimum version requirement");
                 false
             } else {

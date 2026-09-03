@@ -1,72 +1,36 @@
-# Wild linker
+# jdxld
 
-![Wild logo - drawing of rusty chain links with vines](/images/wild.png)
+![jdxld logo - drawing of rusty chain links with vines](/images/jdxld.png)
 
-Wild is a linker with the goal of being very fast for iterative development.
+jdxld is an experimental fork of [Wild](https://github.com/wild-linker/wild), created by David
+Lattimore and its contributors. This fork is focused on incremental linking for Rust builds
+orchestrated by [mr-boxington](https://github.com/jdx/mr-boxington).
 
 The plan is to eventually make it incremental, however that isn't yet implemented. It is however
 already pretty fast even without incremental linking.
 
-## Installation
+## Development status
 
-### From GitHub releases
-
-Download a tarball from the [releases page](https://github.com/wild-linker/wild/releases). Unpack
-it and copy the `wild` binary somewhere on your path.
-
-### Cargo binstall
-
-If you have [cargo-binstall](https://github.com/cargo-bins/cargo-binstall), you can install wild as
-follows:
+jdxld has not published standalone packages or releases. Build it from a checkout with:
 
 ```sh
-cargo binstall wild-linker
+cargo build --release --bin jdxld
 ```
 
-### Brew
-
-```sh
-brew install wild-linker/wild/wild
-```
-
-### Build latest release from crates.io
-
-```sh
-cargo install --locked wild-linker
-```
-
-### Build from git head
-
-To build and install the latest, unreleased code:
-
-```sh
-cargo install --locked --bin wild --git https://github.com/wild-linker/wild.git wild-linker
-```
-
-### Nix
-
-To use a stable Wild from Nixpkgs:
-
-```nix
-let
- wildStdenv = pkgs.useWildLinker pkgs.stdenv;
-in
-pkgs.callPackage ./package { stdenv = wildStdenv; }
-```
-
-to use the latest unstable git revision of wild, see [the nix documentation](./nix/nix.md)
+The standalone binary remains useful for development and compatibility testing. The supported
+incremental mode is being designed around mr-boxington rather than as a general-purpose daemon.
 
 ## Using as your default linker
 
-Being a drop-in replacement, Wild can be used similarly to other linkers by being invoked by GCC or
+Being a drop-in replacement, jdxld can be used similarly to other linkers by being invoked by GCC or
 Clang. Meaning you have several options:
 
-* Clang's exclusive option `--ld-path=wild`
-* GCC 16.1+ and Clang's option `-fuse-ld=wild` (note that Clang requires `ld.wild` binary/symlink)
+* Clang's exclusive option `--ld-path=jdxld`
+* GCC 16.1+ and Clang's option `-fuse-ld=jdxld` (note that Clang requires `ld.jdxld` binary/symlink)
 * Generally supported `-B <path>`, where `<path>` is the directory containing `ld` that points to
-  `wild`
+  `jdxld`
 
-Below are examples of integrating Wild with various build systems.
+Below are examples of integrating jdxld with various build systems.
 
 ### Rust (Cargo)
 
@@ -75,7 +39,7 @@ You can use one of the options mentioned above in `~/.cargo/config.toml`:
 ```toml
 [target.x86_64-unknown-linux-gnu]
 linker = "clang"
-rustflags = ["-Clink-arg=--ld-path=wild"]
+rustflags = ["-Clink-arg=--ld-path=jdxld"]
 ```
 
 Or:
@@ -83,29 +47,22 @@ Or:
 ```toml
 [target.x86_64-unknown-linux-gnu]
 # linker = "clang" # Uncomment this line if your GCC is older than version 16.
-rustflags = ["-Clink-arg=-fuse-ld=wild"]
+rustflags = ["-Clink-arg=-fuse-ld=jdxld"]
 ```
-
-### CMake
-
-CMake 4.4 or later supports Wild directly when used with Clang or GCC 16 or later. You can select
-Wild as the linker by adding `-DCMAKE_LINKER_TYPE=WILD` to the cmake command-line.
-
-For older versions of cmake, see the generic instructions below.
 
 ### C/C++ (autotools, meson, old CMake etc.)
 
 Usually setting `LDFLAGS` is enough, but there are projects that implement their own solutions:
 
 ```sh
-export LDFLAGS="${LDFLAGS} -fuse-ld=wild"
+export LDFLAGS="${LDFLAGS} -fuse-ld=jdxld"
 ```
 
-Or (especially useful for older GCC versions), create a symlink `ld` pointing to `wild` and pass the
+Or (especially useful for older GCC versions), create a symlink `ld` pointing to `jdxld` and pass the
 directory to GCC:
 
 ```sh
-ln -s /usr/bin/wild /tmp/ld
+ln -s /usr/bin/jdxld /tmp/ld
 
 export CFLAGS="${CFLAGS} -B/tmp"
 export CXXFLAGS="${CXXFLAGS} -B/tmp"
@@ -115,8 +72,8 @@ export LDFLAGS="${LDFLAGS} -B/tmp"
 Then configure the project (you might need to remove the configuration cache first) and run your
 usual build steps.
 
-Due to the complexity of these build systems, you might want to verify that Wild was used to link a
-binary with [readelf](#how-can-i-verify-that-wild-was-used-to-link-a-binary).
+Due to the complexity of these build systems, you might want to verify that jdxld was used to link a
+binary with [readelf](#how-can-i-verify-that-jdxld-was-used-to-link-a-binary).
 
 ### Illumos specific Cargo configuration:
 
@@ -126,23 +83,18 @@ binary with [readelf](#how-can-i-verify-that-wild-was-used-to-link-a-binary).
 linker = "/usr/bin/clang"
 
 rustflags = [
-    # Will silently delegate to GNU ld or Sun ld unless the absolute path to Wild is provided.
-    "-Clink-arg=-fuse-ld=/absolute/path/to/wild"
+    # Will silently delegate to GNU ld or Sun ld unless the absolute path to jdxld is provided.
+    "-Clink-arg=-fuse-ld=/absolute/path/to/jdxld"
 ]
 ```
-
-## Using wild in CI
-
-If you'd like to use Wild as your linker for Rust code in CI, see
-[wild-action](https://github.com/wild-linker/action).
 
 ## Q&A
 
 ### Why another linker?
 
 Mold is already very fast, however it doesn't do incremental linking and the author has stated that
-they don't intend to. Wild doesn't do incremental linking yet, but that is the end-goal. By writing
-Wild in Rust, it's hoped that the complexity of incremental linking will be achievable.
+they don't intend to. jdxld doesn't do incremental linking yet, but that is the end-goal. By writing
+jdxld in Rust, it's hoped that the complexity of incremental linking will be achievable.
 
 ### What's working?
 
@@ -160,12 +112,12 @@ The following is working with the caveat that there may be bugs:
 * Output to statically linked, position-independent binaries (static-PIE)
 * Output to dynamically linked binaries
 * Output to shared objects (.so files)
-* Rust proc-macros, when linked with Wild work
-* Most of the top downloaded crates on crates.io have been tested with Wild and pass their tests
+* Rust proc-macros, when linked with jdxld work
+* Most of the top downloaded crates on crates.io have been tested with jdxld and pass their tests
 * Debug info
 * GNU jobserver support
 * Partial linker script support. See the [linker script support matrix](LINKER_SCRIPT_SUPPORT.md) for details.
-* Linker plugin LTO - [known issues](https://github.com/wild-linker/wild/issues?q=is%3Aissue%20state%3Aopen%20label%3ALTO)
+* Linker plugin LTO - [known issues](https://github.com/jdx/jdxld/issues?q=is%3Aissue%20state%3Aopen%20label%3ALTO)
 
 ### What isn't yet supported?
 
@@ -176,7 +128,7 @@ Here are some of the larger things that aren't yet done, roughly sorted by curre
 * Mach-O support
 * Windows support
 
-### How can I verify that Wild was used to link a binary?
+### How can I verify that jdxld was used to link a binary?
 
 Install `readelf` (available from binutils package), then run:
 
@@ -187,7 +139,7 @@ readelf --string-dump .comment my-executable
 Look for a line like:
 
 ```
-Linker: Wild version 0.1.0
+Linker: jdxld version 0.1.0
 ```
 
 You can probably also get away with `strings` (also available from binutils package):
@@ -198,13 +150,12 @@ strings my-executable | grep 'Linker:'
 
 ### Where did the name come from?
 
-It's somewhat of a tradition for linkers to end with the letters "ld". e.g. "GNU ld, "gold", "lld",
-"mold". Since the end-goal is for the linker to be incremental, an "I" is added. Let's say the "W"
-stands for "Wild", since recursive acronyms are popular in open-source projects.
+jdxld is named for this fork's owner and the conventional `ld` linker suffix. The upstream Wild
+name and history remain credited in this repository's history and [NOTICE](NOTICE).
 
 ## Benchmarks
 
-The goal of Wild is to eventually be very fast via incremental linking. However, we also want to be
+The goal of jdxld is to eventually be very fast via incremental linking. However, we also want to be
 as fast as we can be for non-incremental linking and for the initial link when incremental linking
 is enabled.
 
@@ -234,10 +185,10 @@ benchmark shows the time to link it.
 
 ![Benchmark of linking librustc-driver](benchmarks/images/ryzen-9955hx/librustc-driver-time.svg)
 
-For something much smaller, this is the time to link Wild itself. This also shows a few different
-Wild versions, so you can see how the link time has been tracking over releases.
+For something much smaller, this historical upstream benchmark shows the time to link Wild itself.
+It predates the jdxld fork.
 
-![Benchmark of linking wild](benchmarks/images/ryzen-9955hx/wild-time.svg)
+![Historical benchmark of linking Wild](benchmarks/images/ryzen-9955hx/wild-time.svg)
 
 ### Raspberry Pi 5
 
@@ -247,47 +198,34 @@ Here's linking rust-analyzer on a Raspberry Pi 5.
 
 ## Linking Rust code
 
-The following is a `cargo test` command-line that can be used to build and test a crate using Wild.
+The following is a `cargo test` command-line that can be used to build and test a crate using jdxld.
 This has been run successfully on a few popular crates (e.g. ripgrep, serde, tokio, rand, bitflags).
-It assumes that the "wild" binary is on your path. It also depends on the Clang compiler being
+It assumes that the "jdxld" binary is on your path. It also depends on the Clang compiler being
 installed, since GCC doesn't allow using an arbitrary linker.
 
 ```sh
-RUSTFLAGS="-Clinker=clang -Clink-args=--ld-path=wild" cargo test
+RUSTFLAGS="-Clinker=clang -Clink-args=--ld-path=jdxld" cargo test
 ```
 
-Alternatively, with `ld.wild` symlink pointing at `wild`:
+Alternatively, with `ld.jdxld` symlink pointing at `jdxld`:
 ```sh
-RUSTFLAGS="-Clinker=clang -Clink-args=-fuse-ld=wild" cargo test
+RUSTFLAGS="-Clinker=clang -Clink-args=-fuse-ld=jdxld" cargo test
 ```
 
 ## Contributing
 
-For more information on contributing to `wild` see [CONTRIBUTING.md](CONTRIBUTING.md).
+For more information on contributing to `jdxld` see [CONTRIBUTING.md](CONTRIBUTING.md).
 
-For a high-level overview of Wild's design, see [DESIGN.md](DESIGN.md).
-
-## Chat server
-
-We have a Zulip server for Wild-related chat. You can join
-[here](https://wild.zulipchat.com/join/bbopdeg6howwjpaiyowngyde/).
+For a high-level overview of jdxld's design, see [DESIGN.md](DESIGN.md).
 
 ## Further reading
 
 Many of the posts on [David's blog](https://davidlattimore.github.io/) are about various aspects of
-the Wild linker.
-
-## Sponsorship
-
-If you'd like to [sponsor this work](https://github.com/sponsors/davidlattimore), that would be very
-much appreciated. The more sponsorship I get the longer I can continue to work on this project full
-time.
+the jdxld linker.
 
 # Code of Conduct
 
-The Wild project adheres to the [Rust code of
-conduct](https://rust-lang.org/policies/code-of-conduct/). If you have any moderation concerns or
-queries, please email wild-mod@googlegroups.com.
+The jdxld project adheres to the [Rust code of conduct](CODE_OF_CONDUCT.md).
 
 ## License
 
@@ -295,5 +233,5 @@ Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT l
 at your option.
 
 Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in
-Wild by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any
+jdxld by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any
 additional terms or conditions.

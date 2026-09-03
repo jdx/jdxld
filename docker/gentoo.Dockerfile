@@ -1,11 +1,11 @@
 # Run on Gentoo
 #
-# docker build --progress=plain -t wild-dev-gentoo . -f docker/gentoo.Dockerfile
-# docker run -it wild-dev-gentoo
+# docker build --progress=plain -t jdxld-dev-gentoo . -f docker/gentoo.Dockerfile
+# docker run -it jdxld-dev-gentoo
 
 FROM gentoo/stage3:20251208 AS chef
 
-RUN echo "dev-util/rustup" >> /etc/portage/package.accept_keywords/wild
+RUN echo "dev-util/rustup" >> /etc/portage/package.accept_keywords/jdxld
 RUN emerge-webrsync
 # Required for installing binary packages.
 RUN getuto
@@ -20,7 +20,7 @@ RUN rustup toolchain install nightly \
         --target x86_64-unknown-linux-musl,aarch64-unknown-linux-gnu,aarch64-unknown-linux-musl,riscv64gc-unknown-linux-gnu,riscv64gc-unknown-linux-musl \
         --component rustc-codegen-cranelift-preview
 RUN cargo install --locked cargo-chef
-WORKDIR /wild
+WORKDIR /jdxld
 
 # This ensures LLVM's PATH update from the emerge is recognized, while also ensuring
 # rustup's environment in /root is added to PATH, as Docker does not source
@@ -32,6 +32,6 @@ COPY . .
 RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
-COPY --from=planner /wild/recipe.json recipe.json
+COPY --from=planner /jdxld/recipe.json recipe.json
 RUN cargo chef cook --all-targets --recipe-path recipe.json
 COPY . .

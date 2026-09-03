@@ -1,10 +1,10 @@
 {
     "configurations": [
         {
-            "name": "wild-tests",
+            "name": "jdxld-tests",
             "browse": {
                 "path": [
-                    "${workspaceFolder}/wild/tests/sources"
+                    "${workspaceFolder}/jdxld/tests/sources"
                 ],
                 "limitSymbolsToIncludedHeaders": true
             }

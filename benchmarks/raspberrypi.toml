@@ -1,8 +1,8 @@
 name = "raspberrypi"
 
-[bench.wild-no-debug]
+[bench.jdxld-no-debug]
 
-[bench.wild-debug]
+[bench.jdxld-debug]
 
 [bench.librustc-driver]
 

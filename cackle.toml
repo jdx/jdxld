@@ -67,7 +67,7 @@ allow_unsafe = true
 [pkg.rayon]
 allow_unsafe = true
 
-[pkg.wild]
+[pkg.jdxld]
 allow_unsafe = true
 allow_apis = ["fs", "process"]
 
@@ -113,7 +113,7 @@ allow_unsafe = true
 [pkg.tracing-subscriber]
 allow_unsafe = true
 
-[pkg.libwild]
+[pkg.libjdxld]
 allow_unsafe = true
 test.allow_unsafe = true
 allow_apis = ["fs", "process"]
@@ -329,5 +329,5 @@ allow_apis = ["fs", "process"]
 from.test.allow_apis = ["fs"]
 
 [api.fs]
-no_auto_detect = ["wild"]
-include = ["rustix::fs", "libwild::fs"]
+no_auto_detect = ["jdxld"]
+include = ["rustix::fs", "libjdxld::fs"]
