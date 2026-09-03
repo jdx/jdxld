@@ -716,21 +716,20 @@ fn apply_subtractor_pair<'data>(
         "ARM64_RELOC_SUBTRACTOR must be followed by a matching ARM64_RELOC_UNSIGNED"
     );
 
-    let (subtrahend, _, _) = get_resolution(subtractor, object_layout, layout)?;
-    let (minuend_value, _, _) = get_resolution(minuend, object_layout, layout)?;
+    let subtrahend = subtractor_operand_value(subtractor, object_layout, layout)?;
+    let minuend_value = subtractor_operand_value(minuend, object_layout, layout)?;
     let offset = minuend.r_address as usize;
     let size = 1usize << minuend.r_length;
     let bytes = out
         .get(offset..offset + size)
         .context("subtractor relocation is outside its section")?;
     let addend = match size {
-        4 => i32::from_le_bytes(bytes.try_into().unwrap()) as i64,
+        4 => i64::from(i32::from_le_bytes(bytes.try_into().unwrap())),
         8 => i64::from_le_bytes(bytes.try_into().unwrap()),
         _ => bail!("unsupported ARM64_RELOC_SUBTRACTOR size: {size} bytes"),
     };
     let value = minuend_value
-        .raw_value
-        .wrapping_sub(subtrahend.raw_value)
+        .wrapping_sub(subtrahend)
         .wrapping_add_signed(addend);
 
     match size {
@@ -739,6 +738,27 @@ fn apply_subtractor_pair<'data>(
         _ => unreachable!(),
     }
     Ok(())
+}
+
+fn subtractor_operand_value<'data>(
+    rel: RelocationInfo,
+    object_layout: &ObjectLayout<'data, MachO>,
+    layout: &MachOLayout<'data>,
+) -> Result<u64> {
+    if rel.r_extern {
+        return Ok(get_resolution(rel, object_layout, layout)?.0.raw_value);
+    }
+    if rel.r_symbolnum == macho::R_ABS {
+        return Ok(0);
+    }
+
+    let section_index = rel.r_symbolnum as usize - 1;
+    object_layout
+        .section_resolutions
+        .get(section_index)
+        .context("subtractor relocation refers to an invalid section ordinal")?
+        .address()
+        .context("subtractor relocation refers to a section without an address")
 }
 
 #[inline(always)]
