@@ -19,6 +19,7 @@ harness = false
 
 [dependencies]
 blake3.workspace = true
+hex.workspace = true
 libjdxld = { path = "../libjdxld", version = "0.10.0", default-features = false }
 libc.workspace = true
 postcard.workspace = true
@@ -39,7 +40,6 @@ diff.workspace = true
 itertools.workspace = true
 foldhash.workspace = true
 gimli.workspace = true
-hex.workspace = true
 linker-diff.path = "../linker-diff"
 linker-layout.path = "../linker-layout"
 libloading.workspace = true

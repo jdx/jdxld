@@ -62,7 +62,7 @@ pub(crate) fn record(
     let identity_digest = output_path(cwd, arguments).map_or(structure_digest, |output| {
         digest_parts([output.as_os_str()])
     });
-    let state_dir = root.join(blake3::Hash::from_bytes(identity_digest).to_hex().as_str());
+    let state_dir = root.join(hex::encode(identity_digest));
     std::fs::create_dir_all(&state_dir)
         .with_context(|| format!("failed to create jdxld state `{}`", state_dir.display()))?;
     let manifest_path = state_dir.join(MANIFEST_FILE);
@@ -91,13 +91,24 @@ pub(crate) fn record(
 fn structure_digest(cwd: &Path, arguments: &[String], input_paths: &BTreeSet<&Path>) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     let mut is_output_value = false;
+    let mut is_search_path_value = false;
     for argument in arguments.iter().skip(1) {
         if is_output_value {
             hash_part(&mut hasher, OsStr::new("<output>"));
             is_output_value = false;
+        } else if is_search_path_value {
+            if is_rustc_temporary_path(Path::new(argument)) {
+                hash_part(&mut hasher, OsStr::new("<rustc-temporary-search-path>"));
+            } else {
+                hash_part(&mut hasher, OsStr::new(argument));
+            }
+            is_search_path_value = false;
         } else if argument == "-o" || argument == "--output" {
             hash_part(&mut hasher, OsStr::new(argument));
             is_output_value = true;
+        } else if argument == "-L" {
+            hash_part(&mut hasher, OsStr::new(argument));
+            is_search_path_value = true;
         } else if argument.starts_with("--output=") || argument.starts_with("-o") {
             hash_part(&mut hasher, OsStr::new("<output>"));
         } else if argument
@@ -265,7 +276,8 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let first_arguments = vec![
             "jdxld".into(),
-            "-L/tmp/rustcOne/raw-dylibs".into(),
+            "-L".into(),
+            "/tmp/rustcOne/raw-dylibs".into(),
             "/tmp/rustc-one/symbols.o".into(),
             "/stable/one.o".into(),
             "/stable/two.o".into(),
@@ -288,7 +300,8 @@ mod tests {
 
         let second_arguments = vec![
             "jdxld".into(),
-            "-L/tmp/rustcTwo/raw-dylibs".into(),
+            "-L".into(),
+            "/tmp/rustcTwo/raw-dylibs".into(),
             "/tmp/rustc-two/symbols.o".into(),
             "/stable/one.o".into(),
             "/stable/two.o".into(),
