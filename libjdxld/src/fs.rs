@@ -390,15 +390,14 @@ impl CachingFileSystem {
         inputs
     }
 
-    /// Drops cached mappings for inputs that no longer exist or have changed.
+    /// Drops cached mappings that weren't used by the most recently recorded link.
+    ///
+    /// Inputs used by that link were already validated when opened and are checked again when the
+    /// link finishes, so pruning them does not need a third metadata lookup.
     pub fn prune(&self) {
-        self.inputs.lock().unwrap().retain(|path, input| {
-            std::fs::metadata(path).is_ok_and(|metadata| {
-                metadata.modified().is_ok_and(|modified| {
-                    modified == input.modification_time && metadata.len() == input.len
-                })
-            })
-        });
+        let mut inputs = self.inputs.lock().unwrap();
+        let recorded_inputs = self.recorded_inputs.lock().unwrap();
+        inputs.retain(|path, _| recorded_inputs.contains_key(path));
     }
 }
 
@@ -854,6 +853,18 @@ mod caching_tests {
         let (third, _) = file_system.open_input(&path, false).unwrap();
         assert!(!Arc::ptr_eq(&first.input.bytes, &third.input.bytes));
         assert_eq!(third.bytes(), b"second version");
+
+        let unused_path = temp.path().join("unused.o");
+        std::fs::write(&unused_path, b"unused").unwrap();
+        file_system.open_input(&unused_path, false).unwrap();
+        assert_eq!(file_system.inputs.lock().unwrap().len(), 2);
+
+        file_system.start_recording();
+        file_system.open_input(&path, false).unwrap();
+        file_system.prune();
+        let inputs = file_system.inputs.lock().unwrap();
+        assert_eq!(inputs.len(), 1);
+        assert!(inputs.contains_key(&path));
     }
 }
 
