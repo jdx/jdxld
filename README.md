@@ -17,10 +17,11 @@ jdxld has not published standalone packages or releases. Build it from a checkou
 cargo build --release --bin jdxld
 ```
 
-The standalone binary remains useful for development and compatibility testing. The supported
-incremental mode is being designed around mr-boxington rather than as a general-purpose daemon.
-See [the incremental-linking design](docs/INCREMENTAL_LINKING.md) for the process and persistence
-boundary and [the worker prototype results](benchmarks/incremental-prototype.md) for current gains.
+The incremental work intentionally targets AArch64 Mach-O Rust debug builds orchestrated by
+mr-boxington. The standalone binary is only a development and compatibility harness for that path,
+not a separate product goal. See [the incremental-linking design](docs/INCREMENTAL_LINKING.md) for
+the process and persistence boundary and
+[the worker prototype results](benchmarks/incremental-prototype.md) for current gains.
 
 ## Using as your default linker
 

@@ -262,6 +262,8 @@ impl std::fmt::Display for SegmentName {
 pub(crate) struct LayoutExt {
     /// Imported STUB library symbols, sorted by GOT.
     pub(crate) imported_symbols: Vec<ImportedSymbolWithResolution>,
+    /// Link-time definitions that require a rebased GOT entry, sorted by GOT.
+    pub(crate) local_got_entries: Vec<LocalGotEntry>,
 }
 
 #[derive(Debug, Default)]
@@ -282,6 +284,12 @@ pub(crate) struct ImportedSymbolWithResolution {
     pub(crate) symbol_id: SymbolId,
     pub(crate) got_address: NonZeroU64,
     pub(crate) plt_address: Option<NonZeroU64>,
+}
+
+#[derive(derive_more::Debug, Clone, Copy)]
+pub(crate) struct LocalGotEntry {
+    pub(crate) got_address: NonZeroU64,
+    pub(crate) target_address: u64,
 }
 
 #[derive(derive_more::Debug)]
@@ -1086,7 +1094,9 @@ impl platform::Platform for MachO {
     /// LOAD_COMMANDS, etc.) are not.
     type SectionIdentityExt = Option<SegmentName>;
 
-    const HAS_NULL_SYMBOL_ENTRY: bool = true;
+    // Unlike ELF, Mach-O does not reserve symbol-table entry zero as a null symbol. In
+    // particular, rustc's synthetic symbols.o can place a real undefined symbol at index zero.
+    const HAS_NULL_SYMBOL_ENTRY: bool = false;
 
     fn write_output_file<'data, A: platform::Arch<Platform = Self>, F: FileSystem>(
         output: &crate::file_writer::Output<F>,
@@ -1312,10 +1322,18 @@ impl platform::Platform for MachO {
     }
 
     fn create_linker_defined_symbols(
-        _symbols: &mut crate::parsing::InternalSymbolsBuilder<Self>,
+        symbols: &mut crate::parsing::InternalSymbolsBuilder<Self>,
         _output_kind: crate::output_kind::OutputKind,
         _args: &Self::Args,
     ) {
+        // Mach-O objects have no null symbol-table entry, so reserve SymbolId zero explicitly as
+        // the linker's undefined sentinel.
+        symbols
+            .add_symbol(crate::parsing::InternalSymDefInfo::new(
+                crate::parsing::SymbolPlacement::Undefined,
+                b"",
+            ))
+            .hide();
     }
 
     fn built_in_section_infos<'data>()
@@ -1344,7 +1362,7 @@ impl platform::Platform for MachO {
     fn create_finalise_sizes_ext<'data, 'states, 'files, A: platform::Arch<Platform = Self>>(
         _args: &Self::Args,
         groups: &'files mut [layout::GroupState<'data, Self>],
-        _symbol_db: &crate::symbol_db::SymbolDb<'data, Self>,
+        symbol_db: &crate::symbol_db::SymbolDb<'data, Self>,
     ) -> Result<Self::FinaliseSizesExt<'data>>
     where
         'data: 'files,
@@ -1374,6 +1392,11 @@ impl platform::Platform for MachO {
                 }
             }
         }
+
+        imported_libraries = imported_libraries
+            .into_iter()
+            .unique_by(|&file_id| install_name(file_id, symbol_db))
+            .collect();
 
         Ok(FinaliseSizesExt {
             imported_libraries,
@@ -1411,6 +1434,17 @@ impl platform::Platform for MachO {
         layout_ext.imported_symbols = imported_symbols
             .into_iter()
             .sorted_by_key(|symbol| symbol.got_address)
+            .collect();
+        layout_ext.local_got_entries = resolutions
+            .iter()
+            .filter(|resolution| !resolution.flags.is_dynamic())
+            .filter_map(|resolution| {
+                Some(LocalGotEntry {
+                    got_address: resolution.format_specific.got_address?,
+                    target_address: resolution.format_specific.direct_address,
+                })
+            })
+            .sorted_by_key(|entry| entry.got_address)
             .collect();
 
         Ok(layout_ext)
@@ -1663,10 +1697,10 @@ impl platform::Platform for MachO {
         _output_kind: crate::output_kind::OutputKind,
         _args: &Self::Args,
     ) {
-        if flags.is_dynamic() && flags.needs_plt() {
+        if flags.needs_plt() {
             mem_sizes.increment(part_id::PLT_GOT, PLT_ENTRY_SIZE);
         }
-        if flags.is_dynamic() && flags.needs_got() {
+        if flags.needs_got() {
             mem_sizes.increment(part_id::GOT, GOT_ENTRY_SIZE);
         }
     }
@@ -1748,18 +1782,17 @@ impl platform::Platform for MachO {
             format_specific: ResolutionExt {
                 got_address: None,
                 plt_address: None,
+                direct_address: raw_value,
             },
             flags,
         };
 
         if flags.needs_plt() {
             let plt_address = allocate_plt(memory_offsets);
-            resolution.raw_value = plt_address.get();
             resolution.format_specific.plt_address = Some(plt_address);
             resolution.format_specific.got_address = Some(allocate_got(memory_offsets));
         } else if flags.needs_got() {
             let got_address = allocate_got(memory_offsets);
-            resolution.raw_value = got_address.get();
             resolution.format_specific.got_address = Some(got_address);
         }
 
@@ -1989,7 +2022,10 @@ fn create_dynamic_layout_ext<'data>(
         .format_specific
         .imported_libraries
         .iter()
-        .position(|file_id| *file_id == target_file_id)
+        .position(|&file_id| {
+            install_name(file_id, resources.symbol_db)
+                == install_name(target_file_id, resources.symbol_db)
+        })
     else {
         return Ok(None);
     };
@@ -2092,6 +2128,7 @@ pub(crate) struct DynamicLayoutExt {
 pub(crate) struct ResolutionExt {
     pub(crate) got_address: Option<NonZeroU64>,
     pub(crate) plt_address: Option<NonZeroU64>,
+    pub(crate) direct_address: u64,
 }
 
 fn allocate_got(memory_offsets: &mut OutputSectionPartMap<u64>) -> NonZeroU64 {

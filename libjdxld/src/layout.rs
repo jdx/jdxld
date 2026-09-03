@@ -804,6 +804,10 @@ impl<P: Platform> SymbolResolutions<P> {
     pub(crate) fn get(&self, symbol_id: SymbolId) -> Option<&Resolution<P>> {
         self.resolutions[symbol_id.as_usize()].as_ref()
     }
+
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &Resolution<P>> {
+        self.resolutions.iter().flatten()
+    }
 }
 
 pub(crate) enum FileLayout<'data, P: Platform> {

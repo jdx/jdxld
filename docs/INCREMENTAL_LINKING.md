@@ -13,9 +13,9 @@ and a way to invalidate state when the compiler, arguments, or linker changes. m
 owns the surrounding build session, file-digest ledger, cache, and incremental-state lifecycle, so
 duplicating those facilities in jdxld would create two competing sources of truth.
 
-Requiring mr-boxington also permits an intentionally narrow first target: Rust debug links on
-x86-64 Linux with arguments produced by a known rustc/toolchain family. Unsupported link shapes
-fall back to a full jdxld link.
+Requiring mr-boxington also permits an intentionally narrow first target: AArch64 Mach-O Rust
+debug links on macOS, with arguments produced by a known rustc/toolchain family. Unsupported link
+shapes fall back to the platform linker.
 
 ## Process model
 
@@ -47,7 +47,7 @@ written transactionally and become visible only after the output is complete. In
 incompatible generations are discarded and produce a full-link fallback.
 
 mr-boxington owns locking, retention, and garbage collection. jdxld owns the contents and versioning
-of a generation: parsed ELF/archive metadata, symbol resolution results, layout reservations, and
+of a generation: parsed Mach-O/archive metadata, symbol resolution results, layout reservations, and
 the reverse index from input sections to affected relocations and output ranges.
 
 The first on-disk format is intentionally advisory. After every successful full link, jdxld writes
