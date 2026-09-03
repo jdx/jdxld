@@ -57,10 +57,9 @@ use crate::macho::output_section_id;
 use crate::macho::output_section_id::LOAD_COMMANDS;
 use crate::macho::part_id;
 use crate::output_section_id::OrderEvent;
-use crate::output_section_id::OutputSectionId;
 use crate::output_section_id::SectionName;
+use crate::output_section_map::OutputSectionMap;
 use crate::output_section_part_map::OutputSectionPartMap;
-use crate::output_trace::HexU64;
 use crate::output_trace::TraceOutput;
 use crate::platform::Arch;
 use crate::platform::Args;
@@ -119,7 +118,9 @@ use object::write::macho::CodeSignatureEncoder;
 use rayon::iter::IntoParallelIterator;
 use rayon::iter::ParallelIterator;
 use rayon::slice::ParallelSlice;
+#[cfg(not(target_os = "macos"))]
 use sha2::Digest;
+#[cfg(not(target_os = "macos"))]
 use sha2::Sha256;
 use std::collections::HashMap;
 use std::ops::BitAnd;
@@ -138,6 +139,7 @@ pub(crate) fn write<'data, A: Arch<Platform = MachO>>(
 ) -> Result {
     timing_phase!("Write data to file");
     let exports_trie = build_exports_trie(layout)?;
+    let section_indexes = macho_section_indexes(layout)?;
     let (mut section_buffers, mut padding) =
         split_output_into_sections(layout, &mut sized_output.out);
     padding.fill_zero();
@@ -160,6 +162,7 @@ pub(crate) fn write<'data, A: Arch<Platform = MachO>>(
                     &sized_output.trace,
                     &mut symbol_writer,
                     &exports_trie,
+                    &section_indexes,
                 )
                 .with_context(|| format!("Failed copying from {file} to output file"))?;
             }
@@ -194,10 +197,11 @@ fn write_file<'data, A: Arch<Platform = MachO>>(
     _trace: &TraceOutput,
     symbol_writer: &mut MachOSymbolTableWriter,
     exports_trie: &[u8],
+    section_indexes: &OutputSectionMap<Option<u8>>,
 ) -> Result {
     match file {
         FileLayout::Object(s) => {
-            write_object::<A>(s, buffers, layout, symbol_writer)?;
+            write_object::<A>(s, buffers, layout, symbol_writer, section_indexes)?;
         }
         FileLayout::Prelude(s) => write_prelude(s, buffers, layout, exports_trie)?,
         FileLayout::Epilogue(s) => write_epilogue(s, buffers, layout, exports_trie)?,
@@ -646,6 +650,7 @@ fn write_object<'data, A: Arch<Platform = MachO>>(
     buffers: &mut OutputSectionPartMap<&mut [u8]>,
     layout: &MachOLayout<'data>,
     symbol_writer: &mut MachOSymbolTableWriter,
+    section_indexes: &OutputSectionMap<Option<u8>>,
 ) -> Result {
     verbose_timing_phase!("Write object", file_id = object.file_id.as_u32());
 
@@ -662,7 +667,7 @@ fn write_object<'data, A: Arch<Platform = MachO>>(
 
     write_thunks::<A>(object, buffers, layout)?;
 
-    write_symbols(object, buffers, layout, symbol_writer)?;
+    write_symbols(object, buffers, layout, symbol_writer, section_indexes)?;
 
     Ok(())
 }
@@ -809,13 +814,6 @@ fn apply_relocation<'data, A: Arch<Platform = MachO>>(
     let mut offset_in_section = u64::from(rel.r_address);
     let place = section_address + offset_in_section;
 
-    let _span = tracing::trace_span!(
-        "relocation",
-        address = place,
-        address_hex = %HexU64::new(place)
-    )
-    .entered();
-
     let (resolution, _symbol_index, local_symbol_id) = get_resolution(rel, object_layout, layout)?;
     let flags = layout.flags_for_symbol(local_symbol_id);
     let output_kind = layout.symbol_db.output_kind;
@@ -896,15 +894,6 @@ fn apply_relocation<'data, A: Arch<Platform = MachO>>(
     )? {
         value = thunked_value;
     }
-
-    tracing::trace!(
-            %flags,
-            ?rel_info.kind,
-            %rel_info.size,
-            value,
-            value_hex = %HexU64::new(value),
-            symbol_name = %layout.symbol_db.symbol_name_for_display(local_symbol_id),
-            "relocation applied");
 
     rel_info
         .write_to_buffer(value, &mut out[offset_in_section as usize..])
@@ -1278,6 +1267,7 @@ struct ChainedFixup {
 }
 
 fn collect_chained_fixups(layout: &MachOLayout<'_>, output: &[u8]) -> Result<Vec<ChainedFixup>> {
+    timing_phase!("Collect chained fixups");
     let import_ordinals = layout
         .format_specific
         .imported_symbols
@@ -1290,95 +1280,30 @@ fn collect_chained_fixups(layout: &MachOLayout<'_>, output: &[u8]) -> Result<Vec
             )
         })
         .collect::<HashMap<_, _>>();
-    let mut fixups = Vec::new();
-
-    for group in &layout.group_layouts {
-        for file in &group.files {
-            let FileLayout::Object(object) = file else {
-                continue;
-            };
-            for (section_number, section) in object.sections.iter().enumerate() {
-                let SectionSlot::Loaded(_) = section else {
-                    continue;
-                };
-                let section_index = object::SectionIndex(section_number);
-                let Some(section_address) = object.section_resolutions[section_number].address()
-                else {
-                    continue;
-                };
-                let section_flags = object.object.section(section_index)?.flags.get(LE);
-                let is_tlv_descriptors = section_flags.0 & macho::SECTION_TYPE
-                    == u32::from(macho::S_THREAD_LOCAL_VARIABLES.0);
-                let mut pending_subtractor = false;
-
-                for relocation in object.relocations(section_index)?.relocations {
-                    let relocation = relocation.info(LE);
-                    if relocation.r_type == macho::ARM64_RELOC_SUBTRACTOR {
-                        pending_subtractor = true;
-                        continue;
-                    }
-                    if pending_subtractor {
-                        pending_subtractor = false;
-                        continue;
-                    }
-                    if relocation.r_type == macho::ARM64_RELOC_ADDEND {
-                        continue;
-                    }
-                    if relocation.r_type != macho::ARM64_RELOC_UNSIGNED
-                        || relocation.r_length != 3
-                        || relocation.r_pcrel
-                    {
-                        continue;
-                    }
-
-                    let offset = u64::from(relocation.r_address);
-                    if is_tlv_descriptors && offset % 24 == 16 {
-                        // The third TLV descriptor field is an offset into the TLS template, not a
-                        // pointer. It was converted while applying relocations.
-                        continue;
-                    }
-
-                    let address = section_address + offset;
-                    let Some((segment_index, file_offset)) = fixup_location(layout, address) else {
-                        continue;
-                    };
-                    let bytes = output
-                        .get(file_offset..file_offset + size_of::<u64>())
-                        .context("chained fixup is outside the output file")?;
-                    let relocated_value = u64::from_le_bytes(bytes.try_into().unwrap());
-                    let (resolution, _, local_symbol_id) =
-                        get_resolution(relocation, object, layout)?;
-                    let target = if resolution.flags.is_dynamic() {
-                        let canonical_id = layout.symbol_db.definition(local_symbol_id);
-                        let ordinal = *import_ordinals.get(&canonical_id).with_context(|| {
-                            format!(
-                                "missing chained import for {}",
-                                layout.symbol_debug(local_symbol_id)
-                            )
-                        })?;
-                        let addend = relocated_value.wrapping_sub(resolution.raw_value);
-                        ensure!(
-                            addend <= u8::MAX.into(),
-                            "chained bind addend for {} exceeds 8 bits",
-                            layout.symbol_debug(local_symbol_id)
-                        );
-                        ChainedFixupTarget::Bind {
-                            ordinal,
-                            addend: addend as u8,
-                        }
-                    } else {
-                        ChainedFixupTarget::Rebase(relocated_value)
-                    };
-                    fixups.push(ChainedFixup {
-                        segment_index,
-                        address,
-                        file_offset,
-                        target,
-                    });
-                }
-            }
-        }
-    }
+    let sections = layout
+        .group_layouts
+        .iter()
+        .flat_map(|group| &group.files)
+        .filter_map(|file| match file {
+            FileLayout::Object(object) => Some(object),
+            _ => None,
+        })
+        .flat_map(|object| {
+            object
+                .sections
+                .iter()
+                .enumerate()
+                .filter(|(_, section)| matches!(section, SectionSlot::Loaded(_)))
+                .map(move |(section_number, _)| (object, section_number))
+        })
+        .collect_vec();
+    let per_section = sections
+        .into_par_iter()
+        .map(|(object, section_number)| {
+            collect_section_chained_fixups(object, section_number, layout, output, &import_ordinals)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut fixups = per_section.into_iter().flatten().collect_vec();
 
     for (ordinal, symbol) in layout.format_specific.imported_symbols.iter().enumerate() {
         let address = symbol.got_address.get();
@@ -1422,6 +1347,91 @@ fn collect_chained_fixups(layout: &MachOLayout<'_>, output: &[u8]) -> Result<Vec
         deduplicated.push(fixup);
     }
     Ok(deduplicated)
+}
+
+fn collect_section_chained_fixups(
+    object: &ObjectLayout<'_, MachO>,
+    section_number: usize,
+    layout: &MachOLayout<'_>,
+    output: &[u8],
+    import_ordinals: &HashMap<SymbolId, u32>,
+) -> Result<Vec<ChainedFixup>> {
+    let section_index = object::SectionIndex(section_number);
+    let Some(section_address) = object.section_resolutions[section_number].address() else {
+        return Ok(Vec::new());
+    };
+    let section_flags = object.object.section(section_index)?.flags.get(LE);
+    let is_tlv_descriptors =
+        section_flags.0 & macho::SECTION_TYPE == u32::from(macho::S_THREAD_LOCAL_VARIABLES.0);
+    let mut pending_subtractor = false;
+    let mut fixups = Vec::new();
+
+    for relocation in object.relocations(section_index)?.relocations {
+        let relocation = relocation.info(LE);
+        if relocation.r_type == macho::ARM64_RELOC_SUBTRACTOR {
+            pending_subtractor = true;
+            continue;
+        }
+        if pending_subtractor {
+            pending_subtractor = false;
+            continue;
+        }
+        if relocation.r_type == macho::ARM64_RELOC_ADDEND {
+            continue;
+        }
+        if relocation.r_type != macho::ARM64_RELOC_UNSIGNED
+            || relocation.r_length != 3
+            || relocation.r_pcrel
+        {
+            continue;
+        }
+
+        let offset = u64::from(relocation.r_address);
+        if is_tlv_descriptors && offset % 24 == 16 {
+            // The third TLV descriptor field is an offset into the TLS template, not a pointer. It
+            // was converted while applying relocations.
+            continue;
+        }
+
+        let address = section_address + offset;
+        let Some((segment_index, file_offset)) = fixup_location(layout, address) else {
+            continue;
+        };
+        let bytes = output
+            .get(file_offset..file_offset + size_of::<u64>())
+            .context("chained fixup is outside the output file")?;
+        let relocated_value = u64::from_le_bytes(bytes.try_into().unwrap());
+        let (resolution, _, local_symbol_id) = get_resolution(relocation, object, layout)?;
+        let target = if resolution.flags.is_dynamic() {
+            let canonical_id = layout.symbol_db.definition(local_symbol_id);
+            let ordinal = *import_ordinals.get(&canonical_id).with_context(|| {
+                format!(
+                    "missing chained import for {}",
+                    layout.symbol_debug(local_symbol_id)
+                )
+            })?;
+            let addend = relocated_value.wrapping_sub(resolution.raw_value);
+            ensure!(
+                addend <= u8::MAX.into(),
+                "chained bind addend for {} exceeds 8 bits",
+                layout.symbol_debug(local_symbol_id)
+            );
+            ChainedFixupTarget::Bind {
+                ordinal,
+                addend: addend as u8,
+            }
+        } else {
+            ChainedFixupTarget::Rebase(relocated_value)
+        };
+        fixups.push(ChainedFixup {
+            segment_index,
+            address,
+            file_offset,
+            target,
+        });
+    }
+
+    Ok(fixups)
 }
 
 fn fixup_location(layout: &MachOLayout<'_>, address: u64) -> Option<(usize, usize)> {
@@ -1668,7 +1678,7 @@ fn write_chained_fixup_table(
 }
 
 fn write_uuid(layout: &MachOLayout, sized_output: &mut SizedOutput<impl OutputFileData>) -> Result {
-    verbose_timing_phase!("Write UUID");
+    timing_phase!("Write UUID");
 
     let hash = blake3::Hasher::new()
         .update_rayon(&sized_output.out)
@@ -1769,14 +1779,14 @@ fn write_code_signature_hashes(
     layout: &MachOLayout,
     sized_output: &mut SizedOutput<impl OutputFileData>,
 ) -> Result {
-    verbose_timing_phase!("Write code signature hashes");
+    timing_phase!("Write code signature hashes");
 
     let code_signature_section = layout
         .section_layouts
         .get(output_section_id::CODE_SIGNATURE);
     let calculated_hashes: Vec<_> = sized_output.out[..code_signature_section.file_offset]
         .par_chunks(CS_BLOCK_SIZE)
-        .map(Sha256::digest)
+        .map(sha256_digest)
         .collect();
     let calculated_hashes = calculated_hashes.into_iter().flatten().collect_vec();
 
@@ -1799,6 +1809,24 @@ fn write_code_signature_hashes(
         .invalidate(code_signature_section.file_offset + code_signature_section.file_size);
 
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn sha256_digest(bytes: &[u8]) -> [u8; CS_HASH_SIZE as usize] {
+    unsafe extern "C" {
+        fn CC_SHA256(data: *const u8, len: u32, digest: *mut u8) -> *mut u8;
+    }
+
+    let mut digest = [0; CS_HASH_SIZE as usize];
+    // SAFETY: `bytes` and `digest` are valid for the lengths supplied and do not overlap.
+    let result = unsafe { CC_SHA256(bytes.as_ptr(), bytes.len() as u32, digest.as_mut_ptr()) };
+    debug_assert!(!result.is_null());
+    digest
+}
+
+#[cfg(not(target_os = "macos"))]
+fn sha256_digest(bytes: &[u8]) -> [u8; CS_HASH_SIZE as usize] {
+    Sha256::digest(bytes).into()
 }
 
 struct MachOSymbolTableWriter {
@@ -1861,6 +1889,7 @@ fn write_symbols<'data>(
     buffers: &mut OutputSectionPartMap<&mut [u8]>,
     layout: &MachOLayout<'data>,
     symbol_writer: &mut MachOSymbolTableWriter,
+    section_indexes: &OutputSectionMap<Option<u8>>,
 ) -> Result {
     for ((sym_index, sym), flags) in object
         .object
@@ -1895,7 +1924,7 @@ fn write_symbols<'data>(
             };
             let primary_id = layout.output_sections.primary_output_section(section_id);
             let n_type = sym.n_type.with_type(N_SECT);
-            let n_sect = macho_section_index(layout, primary_id).with_context(|| {
+            let n_sect = (*section_indexes.get(primary_id)).with_context(|| {
                 format!(
                     "No Mach-O section index for {} while writing {}",
                     primary_id,
@@ -1908,7 +1937,7 @@ fn write_symbols<'data>(
             let n_desc = sym.n_desc.get(LE);
             (0, sym.n_type.with_type(N_ABS), n_desc)
         } else if sym.as_common().is_some() {
-            let n_sect = macho_section_index(layout, crate::macho::output_section_id::BSS)
+            let n_sect = (*section_indexes.get(crate::macho::output_section_id::BSS))
                 .context("No Mach-O section index for common symbols")?;
             (n_sect, sym.n_type.with_type(N_SECT), Default::default())
         } else if sym.is_undefined() {
@@ -1934,9 +1963,8 @@ fn write_symbols<'data>(
     Ok(())
 }
 
-// TODO: This is inefficient; simplify it once load commands use a table allocator instead of
-// being modeled as a section.
-fn macho_section_index(layout: &MachOLayout<'_>, section_id: OutputSectionId) -> Result<u8> {
+fn macho_section_indexes(layout: &MachOLayout<'_>) -> Result<OutputSectionMap<Option<u8>>> {
+    let mut indexes = OutputSectionMap::with_size(layout.output_sections.section_infos.len());
     // The section index is one-based.
     let mut section_idx = 1u8;
     for event in &layout.output_order {
@@ -1948,9 +1976,7 @@ fn macho_section_index(layout: &MachOLayout<'_>, section_id: OutputSectionId) ->
                         .identity(current)
                         .is_some_and(|identity| identity.format_specific().is_some()) =>
             {
-                if current == section_id {
-                    return Ok(section_idx);
-                }
+                *indexes.get_mut(current) = Some(section_idx);
                 section_idx = section_idx
                     .checked_add(1)
                     .ok_or(error!("Section index out of range (u8)"))?;
@@ -1959,5 +1985,22 @@ fn macho_section_index(layout: &MachOLayout<'_>, section_id: OutputSectionId) ->
         }
     }
 
-    bail!("cannot find the output section")
+    Ok(indexes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sha256_digest;
+
+    #[test]
+    fn sha256_digest_matches_known_value() {
+        assert_eq!(
+            sha256_digest(b"abc"),
+            [
+                0xba, 0x78, 0x16, 0xbf, 0x8f, 0x01, 0xcf, 0xea, 0x41, 0x41, 0x40, 0xde, 0x5d, 0xae,
+                0x22, 0x23, 0xb0, 0x03, 0x61, 0xa3, 0x96, 0x17, 0x7a, 0x9c, 0xb4, 0x10, 0xff, 0x61,
+                0xf2, 0x00, 0x15, 0xad,
+            ]
+        );
+    }
 }
