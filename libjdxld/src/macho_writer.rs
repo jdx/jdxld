@@ -115,9 +115,11 @@ use object::macho::SegmentFlags;
 use object::slice_from_bytes_mut;
 use object::write::macho::CodeDirectory;
 use object::write::macho::CodeSignatureEncoder;
+use rayon::iter::IndexedParallelIterator;
 use rayon::iter::IntoParallelIterator;
 use rayon::iter::ParallelIterator;
 use rayon::slice::ParallelSlice;
+use rayon::slice::ParallelSliceMut;
 #[cfg(not(target_os = "macos"))]
 use sha2::Digest;
 #[cfg(not(target_os = "macos"))]
@@ -1801,21 +1803,25 @@ fn write_code_signature_hashes(
     let code_signature_section = layout
         .section_layouts
         .get(output_section_id::CODE_SIGNATURE);
-    let calculated_hashes: Vec<_> = sized_output.out[..code_signature_section.file_offset]
-        .par_chunks(CS_BLOCK_SIZE)
-        .map(sha256_digest)
-        .collect();
-    let calculated_hashes = calculated_hashes.into_iter().flatten().collect_vec();
-
-    let mut section_buffers = split_output_into_sections(layout, &mut sized_output.out).0;
-    let code_signature = section_buffers.get_mut(output_section_id::CODE_SIGNATURE);
+    let (signed_data, signature_and_after) = sized_output
+        .out
+        .split_at_mut(code_signature_section.file_offset);
+    let code_signature = signature_and_after
+        .get_mut(..code_signature_section.file_size)
+        .ok_or_else(|| error!("Invalid CODE_SIGNATURE allocation"))?;
     let hashes_offset =
         (CS_HEADERS_SIZE + code_signature_padded_identifier_size(layout.args())) as usize;
     let hashes = code_signature
         .get_mut(hashes_offset..)
         .ok_or_else(|| error!("Invalid CODE_SIGNATURE allocation"))?;
-
-    hashes.copy_from_slice(&calculated_hashes);
+    ensure!(
+        hashes.len() == signed_data.len().div_ceil(CS_BLOCK_SIZE) * CS_HASH_SIZE as usize,
+        "Invalid CODE_SIGNATURE hash allocation"
+    );
+    signed_data
+        .par_chunks(CS_BLOCK_SIZE)
+        .zip(hashes.par_chunks_mut(CS_HASH_SIZE as usize))
+        .for_each(|(block, hash)| hash.copy_from_slice(&sha256_digest(block)));
 
     // Match lld's workaround for the macOS kernel caching signature-verification
     // data before the final code signature has been written:
