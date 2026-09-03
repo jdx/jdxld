@@ -1966,7 +1966,7 @@ fn write_symbols<'data>(
 fn macho_section_indexes(layout: &MachOLayout<'_>) -> Result<OutputSectionMap<Option<u8>>> {
     let mut indexes = OutputSectionMap::with_size(layout.output_sections.section_infos.len());
     // The section index is one-based.
-    let mut section_idx = 1u8;
+    let mut next_section_idx = 1u16;
     for event in &layout.output_order {
         match event {
             OrderEvent::Section(current)
@@ -1976,10 +1976,8 @@ fn macho_section_indexes(layout: &MachOLayout<'_>) -> Result<OutputSectionMap<Op
                         .identity(current)
                         .is_some_and(|identity| identity.format_specific().is_some()) =>
             {
-                *indexes.get_mut(current) = Some(section_idx);
-                section_idx = section_idx
-                    .checked_add(1)
-                    .ok_or(error!("Section index out of range (u8)"))?;
+                *indexes.get_mut(current) = Some(checked_macho_section_index(next_section_idx)?);
+                next_section_idx += 1;
             }
             _ => {}
         }
@@ -1988,9 +1986,22 @@ fn macho_section_indexes(layout: &MachOLayout<'_>) -> Result<OutputSectionMap<Op
     Ok(indexes)
 }
 
+fn checked_macho_section_index(index: u16) -> Result<u8> {
+    index
+        .try_into()
+        .map_err(|_| error!("Section index out of range (u8)"))
+}
+
 #[cfg(test)]
 mod tests {
+    use super::checked_macho_section_index;
     use super::sha256_digest;
+
+    #[test]
+    fn maximum_section_index_is_valid() {
+        assert_eq!(checked_macho_section_index(255).unwrap(), 255);
+        assert!(checked_macho_section_index(256).is_err());
+    }
 
     #[test]
     fn sha256_digest_matches_known_value() {
