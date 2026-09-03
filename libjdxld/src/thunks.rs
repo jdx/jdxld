@@ -84,6 +84,8 @@ pub(crate) struct ThunkLayoutBuilder {
 
     primary_function_part_id: PartId,
 
+    conservative: bool,
+
     /// Symbols that are defined in primary parts and referenced by range-limited relocations from
     /// non-primary parts.
     non_primary_referenced_symbols: SegQueue<SymbolId>,
@@ -128,6 +130,7 @@ impl ThunkLayoutBuilder {
         Some(ThunkLayoutBuilder {
             branch_range: config.min_branch_range - MAXIMUM_THUNK_BYTES_PER_BLOCK,
             primary_function_part_id: config.primary_function_part_id,
+            conservative: config.conservative,
             non_primary_referenced_symbols: SegQueue::new(),
         })
     }
@@ -267,7 +270,9 @@ impl ThunkLayoutBuilder {
                             continue;
                         };
 
-                        if !provably_in_range(src_start, src_end, definition_id) {
+                        if self.conservative
+                            || !provably_in_range(src_start, src_end, definition_id)
+                        {
                             object_symbols.insert(definition_id);
                         }
                     }

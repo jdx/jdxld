@@ -2,7 +2,6 @@ use crate::FileSystem;
 use crate::OutputKind;
 use crate::alignment;
 use crate::alignment::Alignment;
-use crate::alignment::MACHO_PAGE_ALIGNMENT;
 use crate::args::macho::MachOArgs;
 use crate::ensure;
 use crate::error;
@@ -58,6 +57,7 @@ use object::macho::N_ABS;
 use object::macho::N_EXT;
 use object::macho::N_PEXT;
 use object::macho::N_SECT;
+use object::macho::N_UNDF;
 use object::macho::N_WEAK_DEF;
 use object::macho::S_ATTR_EXT_RELOC;
 use object::macho::S_ATTR_LOC_RELOC;
@@ -114,6 +114,19 @@ enum SinglePartSectionId {
     Count,
 }
 
+#[repr(u32)]
+#[derive(Clone, Copy)]
+enum RegularSectionId {
+    Text,
+    Bss,
+
+    // Must be last.
+    Count,
+}
+
+const MACHO_NUM_SINGLE_PART_SECTIONS: u32 = SinglePartSectionId::Count as u32;
+const MACHO_NUM_BUILT_IN_REGULAR_SECTIONS: usize = RegularSectionId::Count as usize;
+
 pub(crate) mod part_id {
     use super::SinglePartSectionId;
     use crate::part_id::PartId;
@@ -129,6 +142,7 @@ pub(crate) mod part_id {
 }
 
 pub(crate) mod output_section_id {
+    use super::RegularSectionId;
     use super::SinglePartSectionId;
     use crate::output_section_id::OutputSectionId;
 
@@ -147,6 +161,8 @@ pub(crate) mod output_section_id {
         SinglePartSectionId::ChainedFixupTable.output_section_id();
     pub(crate) const EXPORTS_TRIE: OutputSectionId =
         SinglePartSectionId::ExportsTrie.output_section_id();
+    pub(crate) const BSS: OutputSectionId = RegularSectionId::Bss.output_section_id();
+    pub(crate) const TEXT: OutputSectionId = RegularSectionId::Text.output_section_id();
 }
 
 const LE: Endianness = Endianness::Little;
@@ -164,10 +180,12 @@ pub(crate) const DYLINKER_PATH: &[u8] = b"/usr/lib/dyld";
 // TODO: Getting the number of active segments in epilogue depends on determine_header_size
 // which is called later for the prologue. We potentially over-allocate a couple of bytes.
 pub(crate) const MAX_SEGMENT_COUNT: usize = 6;
+pub(crate) const MAX_CHAINED_FIXUP_PAGES_PER_SEGMENT: usize = 8192;
 pub(crate) const CHAINED_FIXUP_TABLE_BASE_SIZE: u64 = (size_of::<ChainedFixupsHeader>()
     + size_of::<u32>() * (MAX_SEGMENT_COUNT + /* leading segment count */ 1)
-    + size_of::<ChainedStartsInSegment>())
-    as u64;
+    + (size_of::<ChainedStartsInSegment>()
+        + size_of::<u16>() * MAX_CHAINED_FIXUP_PAGES_PER_SEGMENT)
+        * MAX_SEGMENT_COUNT) as u64;
 pub(crate) const CHAINED_FIXUP_IMPORT_SIZE: u64 = size_of::<u32>() as u64;
 pub(crate) const CHAINED_FIXUP_PAGE_START_SIZE: u64 = size_of::<u16>() as u64;
 pub(crate) const GOT_ENTRY_SIZE: u64 = 8;
@@ -246,7 +264,7 @@ impl SegmentName {
         Self(bytes)
     }
 
-    fn is_writable(self) -> bool {
+    pub(crate) fn is_writable(self) -> bool {
         !matches!(self, Self::PAGEZERO | Self::TEXT | Self::LINKEDIT)
     }
 }
@@ -682,8 +700,26 @@ impl platform::SectionFlags for SectionFlags {
 // Documentation link for Nlist64 type: https://leopard-adc.pepas.com/documentation/DeveloperTools/Conceptual/MachORuntime/Reference/reference.html
 impl platform::Symbol for SymtabEntry {
     fn as_common(&self) -> Option<platform::CommonSymbol> {
-        // TODO
-        None
+        if self.n_type.typ() != N_UNDF || self.n_value.get(LE) == 0 {
+            return None;
+        }
+
+        let size = self.n_value.get(LE);
+        let encoded_alignment = ((self.n_desc.get(LE).0 >> 8) & 0xf) as u8;
+        let alignment = Alignment {
+            exponent: if encoded_alignment == 0 {
+                // Mach-O uses natural alignment (the next power of two of the size), capped at
+                // 2^15 for normal outputs, when the common alignment is not encoded in n_desc.
+                size.min(1 << 15).next_power_of_two().trailing_zeros() as u8
+            } else {
+                encoded_alignment
+            },
+        };
+        let size = alignment.align_up(size);
+        Some(platform::CommonSymbol {
+            size,
+            part_id: output_section_id::BSS.part_id_with_alignment::<MachO>(alignment),
+        })
     }
 
     fn is_undefined(&self) -> bool {
@@ -1015,8 +1051,8 @@ impl<'data> platform::VerneedTable<'data> for VerneedTable<'data> {
 }
 
 impl platform::Platform for MachO {
-    const NUM_SINGLE_PART_SECTIONS: u32 = SinglePartSectionId::Count as u32;
-    const NUM_BUILT_IN_REGULAR_SECTIONS: usize = 0;
+    const NUM_SINGLE_PART_SECTIONS: u32 = MACHO_NUM_SINGLE_PART_SECTIONS;
+    const NUM_BUILT_IN_REGULAR_SECTIONS: usize = MACHO_NUM_BUILT_IN_REGULAR_SECTIONS;
 
     // The macOS kernel caches code signature state by vnode. Reusing a previously executed output's
     // inode after changing its contents can therefore cause the new executable to SIGKILL, even
@@ -1121,7 +1157,7 @@ impl platform::Platform for MachO {
     fn is_zero_sized_section_content(
         _section_id: crate::output_section_id::OutputSectionId,
     ) -> bool {
-        todo!()
+        true
     }
 
     fn built_in_section_details() -> &'static [Self::BuiltInSectionDetails] {
@@ -1169,6 +1205,10 @@ impl platform::Platform for MachO {
         _object: &crate::layout::ObjectLayoutState<'data, Self>,
         _memory_offsets: &mut crate::output_section_part_map::OutputSectionPartMap<u64>,
     ) {
+    }
+
+    fn file_thunk_config<'data>(_file: &Self::File<'data>) -> Option<crate::platform::ThunkConfig> {
+        <crate::macho_aarch64::MachOAArch64 as crate::platform::Arch>::thunk_config()
     }
 
     fn finalise_layout_dynamic<'data>(
@@ -1333,6 +1373,9 @@ impl platform::Platform for MachO {
                 crate::parsing::SymbolPlacement::Undefined,
                 b"",
             ))
+            .hide();
+        symbols
+            .section_start(crate::output_section_id::FILE_HEADER, "___dso_handle")
             .hide();
     }
 
@@ -1532,11 +1575,6 @@ impl platform::Platform for MachO {
                     + 1
             })
             .sum::<u64>();
-
-        // Chained fixups record start information per page. At this point the final GOT size is
-        // known, so reserve the fixup table entries needed to describe the GOT pages.
-        fixup_table_size += CHAINED_FIXUP_PAGE_START_SIZE
-            * (state.imported_symbols.len() as u64).div_ceil(MACHO_PAGE_ALIGNMENT.value());
 
         mem_sizes.increment(
             part_id::CHAINED_FIXUP_TABLE,
@@ -1745,7 +1783,7 @@ impl platform::Platform for MachO {
         _sizes: &mut crate::output_section_part_map::OutputSectionPartMap<u64>,
         _symbol_db: &crate::symbol_db::SymbolDb<Self>,
     ) -> Result {
-        todo!()
+        Ok(())
     }
 
     fn allocate_prelude(
@@ -1868,6 +1906,7 @@ impl platform::Platform for MachO {
         builder.add_section(output_section_id::LOAD_COMMANDS);
 
         // Content of the sections (e.g. __text, __data).
+        builder.add_section(output_section_id::TEXT);
         add_sections_in_segment(
             &mut builder,
             output_sections,
@@ -1886,6 +1925,7 @@ impl platform::Platform for MachO {
             if segment == SegmentName::DATA {
                 add_sections_in_segment(&mut builder, output_sections, &custom.tdata, segment);
                 add_sections_in_segment(&mut builder, output_sections, &custom.tbss, segment);
+                builder.add_section(output_section_id::BSS);
             }
             add_sections_in_segment(&mut builder, output_sections, &custom.bss, segment);
         }
@@ -2092,6 +2132,17 @@ const SECTION_DEFINITIONS: [BuiltInSectionDetails; NUM_BUILT_IN_SECTIONS] = {
         section_flags: macho::S_NON_LAZY_SYMBOL_POINTERS.to_flags(),
         ..DEFAULT_DEFS
     };
+    defs[output_section_id::TEXT.as_usize()] = BuiltInSectionDetails {
+        kind: SectionKind::Primary(SectionIdentity::new(
+            SectionName(b"__text"),
+            Some(SegmentName::TEXT),
+        )),
+        section_flags: macho::S_REGULAR
+            .to_flags()
+            .with(macho::S_ATTR_PURE_INSTRUCTIONS)
+            .with(macho::S_ATTR_SOME_INSTRUCTIONS),
+        min_alignment: Alignment { exponent: 2 },
+    };
     defs[output_section_id::PLT_GOT.as_usize()] = BuiltInSectionDetails {
         kind: SectionKind::Primary(SectionIdentity::new(
             SectionName(b"__stubs"),
@@ -2102,6 +2153,14 @@ const SECTION_DEFINITIONS: [BuiltInSectionDetails; NUM_BUILT_IN_SECTIONS] = {
             .with(macho::S_ATTR_PURE_INSTRUCTIONS)
             .with(macho::S_ATTR_SOME_INSTRUCTIONS),
         min_alignment: Alignment { exponent: 2 },
+        ..DEFAULT_DEFS
+    };
+    defs[output_section_id::BSS.as_usize()] = BuiltInSectionDetails {
+        kind: SectionKind::Primary(SectionIdentity::new(
+            SectionName(b"__common"),
+            Some(SegmentName::DATA),
+        )),
+        section_flags: macho::S_ZEROFILL.to_flags(),
         ..DEFAULT_DEFS
     };
 
@@ -2144,6 +2203,7 @@ fn allocate_plt(memory_offsets: &mut OutputSectionPartMap<u64>) -> NonZeroU64 {
 }
 
 const DEFAULT_SECTION_RULES: &[SectionRule<'static>] = &[
+    SectionRule::exact_section(b"__text", output_section_id::TEXT),
     // TODO: Add a Mach-O output section ID and rule for `__compact_unwind`.
 ];
 
@@ -2262,6 +2322,14 @@ fn process_relocation<'data, 'scope, A: platform::Arch<Platform = MachO>>(
         let atomic_flags = &resources.per_symbol_flags.get_atomic(symbol_id);
         let previous_flags = atomic_flags.fetch_or(flags_to_add);
 
+        crate::thunks::handle_thunk_extensions_for_relocation::<A>(
+            object.section_part_id(section_index, &resources.symbol_db.section_part_ids),
+            resources,
+            local_symbol_id,
+            symbol_id,
+            rel_info,
+        );
+
         layout::check_for_undefined::<A>(
             object,
             object.object.section(section_index)?,
@@ -2319,5 +2387,11 @@ impl SinglePartSectionId {
 
     const fn output_section_id(self) -> OutputSectionId {
         OutputSectionId::from_u32(self as u32)
+    }
+}
+
+impl RegularSectionId {
+    const fn output_section_id(self) -> OutputSectionId {
+        OutputSectionId::from_u32(MACHO_NUM_SINGLE_PART_SECTIONS).offset(self as usize)
     }
 }

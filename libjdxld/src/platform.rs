@@ -76,6 +76,10 @@ pub(crate) struct ThunkConfig {
     /// Size in bytes of a single thunk. Must be a multiple of the `primary_function_part_id`
     /// alignment.
     pub(crate) thunk_size: u64,
+
+    /// Allocate a thunk candidate for every range-limited reference in its block. This is useful
+    /// for formats whose final stub placement is not represented by the generic range estimator.
+    pub(crate) conservative: bool,
 }
 
 /// Represents a supported architecture. Note that implementations are file-format specific.

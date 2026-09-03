@@ -1109,7 +1109,7 @@ impl<'data, P: Platform> SymbolRequestHandler<'data, P> for ObjectLayoutState<'d
                     gc_unit,
                 )));
         } else if let Some(common_symbol) = local_symbol.as_common() {
-            common.allocate(common_symbol.part_id, common_symbol.size);
+            common.allocate_common(symbol_id, common_symbol);
         }
 
         Ok(())
@@ -1264,6 +1264,8 @@ impl<'data, P: Platform> SymbolRequestHandler<'data, P> for SyntheticSymbolsLayo
 pub(crate) struct CommonGroupState<'data, P: Platform> {
     mem_sizes: OutputSectionPartMap<u64>,
 
+    allocated_common_symbols: HashSet<SymbolId>,
+
     section_attributes: HashMap<OutputSectionId, P::SectionAttributes>,
 
     /// Dynamic symbols that need to be defined. Because of the ordering requirements for symbol
@@ -1279,6 +1281,7 @@ impl<'data, P: Platform> CommonGroupState<'data, P> {
     fn new(output_sections: &OutputSections<P>) -> Self {
         Self {
             mem_sizes: output_sections.new_part_map(),
+            allocated_common_symbols: Default::default(),
             section_attributes: Default::default(),
             dynamic_symbol_definitions: Default::default(),
             format_specific: Default::default(),
@@ -1327,6 +1330,12 @@ impl<'data, P: Platform> CommonGroupState<'data, P> {
 
     pub(crate) fn allocate(&mut self, part_id: PartId, size: u64) {
         self.mem_sizes.increment(part_id, size);
+    }
+
+    fn allocate_common(&mut self, symbol_id: SymbolId, symbol: crate::platform::CommonSymbol) {
+        if self.allocated_common_symbols.insert(symbol_id) {
+            self.allocate(symbol.part_id, symbol.size);
+        }
     }
 
     fn store_section_attributes(&mut self, part_id: PartId, header: &P::SectionHeader) {
@@ -4695,7 +4704,7 @@ impl<'data> SymbolCopyInfo<'data> {
         symbol_state: ValueFlags,
         sections: &[SectionSlot],
     ) -> Option<SymbolCopyInfo<'data>> {
-        if !symbol_db.is_canonical(symbol_id) || sym.is_undefined() {
+        if !symbol_db.is_canonical(symbol_id) || (sym.is_undefined() && sym.as_common().is_none()) {
             return None;
         }
 

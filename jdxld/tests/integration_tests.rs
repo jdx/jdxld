@@ -357,6 +357,7 @@ use object::ObjectSymbol as _;
 use object::macho::LC_CODE_SIGNATURE;
 use object::macho::LC_DYLD_CHAINED_FIXUPS;
 use object::macho::LC_DYLD_EXPORTS_TRIE;
+use object::macho::MH_HAS_TLV_DESCRIPTORS;
 use object::macho::S_THREAD_LOCAL_REGULAR;
 use object::macho::S_THREAD_LOCAL_VARIABLES;
 use object::macho::S_THREAD_LOCAL_ZEROFILL;
@@ -365,6 +366,7 @@ use object::macho::SEG_TEXT;
 use object::read::elf::ProgramHeader;
 use object::read::macho::ExportData;
 use object::read::macho::LoadCommandVariant;
+use object::read::macho::MachHeader as _;
 use object::read::macho::Segment;
 use regex::Regex;
 use serde::Deserialize;
@@ -5998,7 +6000,7 @@ fn verify_macho_exports(obj: &object::File, bytes: &[u8]) -> Result<HashMap<Vec<
 }
 
 fn verify_macho_tlv_template_layout(obj: &object::File) -> Result {
-    let object::File::MachO64(_) = obj else {
+    let object::File::MachO64(macho) = obj else {
         return Ok(());
     };
 
@@ -6023,6 +6025,13 @@ fn verify_macho_tlv_template_layout(obj: &object::File) -> Result {
         .copied()
         .filter(|(_, ty, _, _)| *ty == S_THREAD_LOCAL_VARIABLES)
         .collect_vec();
+
+    let has_tlv_descriptor_flag =
+        macho.macho_header().flags(macho.endian()).0 & MH_HAS_TLV_DESCRIPTORS.0 != 0;
+    ensure!(
+        has_tlv_descriptor_flag == !descriptors.is_empty(),
+        "MH_HAS_TLV_DESCRIPTORS must match the presence of TLV descriptor sections"
+    );
 
     ensure!(
         descriptors
