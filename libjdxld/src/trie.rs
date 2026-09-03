@@ -39,6 +39,11 @@ struct UncompressedNode {
     num_children: usize,
 }
 
+#[derive(Debug, Default)]
+pub(crate) struct Topology {
+    nodes: Vec<UncompressedNode>,
+}
+
 #[cfg(test)]
 fn build(symbols: &mut [Symbol<'_>]) -> Vec<u8> {
     symbols.sort_unstable_by(|a, b| a.name.cmp(b.name));
@@ -47,6 +52,11 @@ fn build(symbols: &mut [Symbol<'_>]) -> Vec<u8> {
 
 /// Build a Mach-O exports trie for symbols that are already sorted by name.
 pub(crate) fn build_sorted(symbols: &[Symbol<'_>]) -> Vec<u8> {
+    let topology = Topology::new(symbols);
+    build_with_topology(symbols, &topology)
+}
+
+pub(crate) fn build_with_topology(symbols: &[Symbol<'_>], topology: &Topology) -> Vec<u8> {
     if symbols.is_empty() {
         return Vec::new();
     }
@@ -58,10 +68,10 @@ pub(crate) fn build_sorted(symbols: &[Symbol<'_>]) -> Vec<u8> {
 
     let mut builder = Builder {
         symbols,
-        nodes: Vec::with_capacity(symbols.len() + 1),
+        nodes: Vec::with_capacity(topology.nodes.len()),
         edges: Vec::with_capacity(symbols.len()),
     };
-    builder.build_nodes();
+    builder.build_nodes_from_topology(topology);
     builder.layout_until_stable();
     builder.encode()
 }
@@ -72,13 +82,13 @@ struct Builder<'data, 'symbols> {
     edges: Vec<Edge<'data>>,
 }
 
-impl<'data> Builder<'data, '_> {
-    fn build_nodes(&mut self) {
+impl Topology {
+    pub(crate) fn new(symbols: &[Symbol<'_>]) -> Self {
         let mut uncompressed = vec![UncompressedNode::default()];
         let mut previous_name = &[][..];
         let mut previous_path = vec![0];
 
-        for (symbol_index, symbol) in self.symbols.iter().enumerate() {
+        for (symbol_index, symbol) in symbols.iter().enumerate() {
             let common_prefix = previous_name
                 .iter()
                 .zip(symbol.name)
@@ -132,7 +142,22 @@ impl<'data> Builder<'data, '_> {
             previous_name = symbol.name;
         }
 
-        for source in &uncompressed {
+        Topology {
+            nodes: uncompressed,
+        }
+    }
+}
+
+impl<'data> Builder<'data, '_> {
+    #[cfg(test)]
+    fn build_nodes(&mut self) {
+        let topology = Topology::new(self.symbols);
+        self.build_nodes_from_topology(&topology);
+    }
+
+    fn build_nodes_from_topology(&mut self, topology: &Topology) {
+        let uncompressed = &topology.nodes;
+        for source in uncompressed {
             let (address, flags) = source
                 .symbol
                 .map_or((None, macho::ExportSymbolFlags(0)), |i| {
@@ -450,6 +475,12 @@ mod tests {
             })
             .collect_vec();
 
-        assert!(build(&mut actual).len() <= build(&mut maximum).len());
+        let maximum_trie = build(&mut maximum);
+        let topology = Topology::new(&maximum);
+        actual.sort_unstable_by(|a, b| a.name.cmp(b.name));
+        let actual_trie = build_with_topology(&actual, &topology);
+
+        assert_eq!(actual_trie, build_sorted(&actual));
+        assert!(actual_trie.len() <= maximum_trie.len());
     }
 }

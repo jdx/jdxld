@@ -378,7 +378,24 @@ fn build_exports_trie(layout: &MachOLayout<'_>) -> Result<Vec<u8>> {
         })
         .collect::<Result<Vec<_>>>()?;
 
-    Ok(crate::trie::build_sorted(&symbols))
+    // Archive filtering can remove exports after sizing. Reuse the cached topology when every
+    // definition survived, and rebuild the shape for the uncommon filtered case.
+    if symbols.len() == layout.dynamic_symbol_definitions.len() {
+        let topology = layout
+            .group_layouts
+            .last()
+            .and_then(|group| group.files.last())
+            .and_then(|file| match file {
+                FileLayout::Epilogue(epilogue) => {
+                    epilogue.format_specific.export_trie_topology.as_ref()
+                }
+                _ => None,
+            })
+            .context("Missing Mach-O export trie topology")?;
+        Ok(crate::trie::build_with_topology(&symbols, topology))
+    } else {
+        Ok(crate::trie::build_sorted(&symbols))
+    }
 }
 
 fn exported_symbol_is_weak(layout: &MachOLayout<'_>, symbol_id: SymbolId) -> Result<bool> {

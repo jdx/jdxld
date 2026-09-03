@@ -1544,7 +1544,10 @@ impl platform::Platform for MachO {
             .copied()
             .collect();
 
-        EpilogueLayoutExt { imported_symbols }
+        EpilogueLayoutExt {
+            imported_symbols,
+            export_trie_topology: None,
+        }
     }
 
     fn apply_non_addressable_indexes_epilogue(
@@ -1602,10 +1605,10 @@ impl platform::Platform for MachO {
             })
             .collect_vec();
 
-        mem_sizes.increment(
-            part_id::EXPORTS_TRIE,
-            crate::trie::build_sorted(&exports).len() as u64,
-        );
+        let topology = crate::trie::Topology::new(&exports);
+        let exports_size = crate::trie::build_with_topology(&exports, &topology).len() as u64;
+        state.export_trie_topology = Some(topology);
+        mem_sizes.increment(part_id::EXPORTS_TRIE, exports_size);
     }
 
     fn finalise_sizes_all<'data>(
@@ -2175,6 +2178,7 @@ const SECTION_DEFINITIONS: [BuiltInSectionDetails; NUM_BUILT_IN_SECTIONS] = {
 #[derive(Debug, Default)]
 pub(crate) struct EpilogueLayoutExt {
     imported_symbols: Vec<SymbolId>,
+    pub(crate) export_trie_topology: Option<crate::trie::Topology>,
 }
 
 #[derive(Debug)]
