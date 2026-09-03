@@ -9,9 +9,23 @@ orchestrated by [mr-boxington](https://github.com/jdx/mr-boxington).
 The plan is to eventually make it incremental, however that isn't yet implemented. It is however
 already pretty fast even without incremental linking.
 
-## Development status
+## Installation
 
-jdxld has not published standalone packages or releases. Build it from a checkout with:
+The supported deployment is the signed and notarized Apple Silicon binary consumed by
+mr-boxington. Download and verify the latest release with:
+
+```sh
+archive=jdxld-aarch64-apple-darwin.tar.gz
+release=https://github.com/jdx/jdxld/releases/latest/download
+curl -fsSLO "$release/$archive"
+curl -fsSLO "$release/SHA256SUMS"
+grep "  $archive$" SHA256SUMS | shasum -a 256 --check --strict -
+tar -xzf "$archive"
+install -m 0755 jdxld "$HOME/.local/bin/jdxld"
+```
+
+Release archives carry a stable name so mr-boxington can fetch the latest linker without knowing
+its version in advance. For development, build it from a checkout with:
 
 ```sh
 cargo build --release --bin jdxld

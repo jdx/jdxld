@@ -1,0 +1,28 @@
+[workspace]
+# jdxld is deployed as a GitHub release artifact for mr-boxington. The supporting
+# workspace crates are implementation details and are not published independently.
+release = false
+release_always = false
+git_only = true
+git_tag_enable = false
+git_release_enable = false
+semver_check = false
+
+[[package]]
+name = "jdxld"
+release = true
+git_only = true
+git_tag_enable = true
+git_tag_name = "v{{ version }}"
+git_release_enable = true
+git_release_draft = true
+git_release_name = "v{{ version }}"
+changelog_path = "CHANGELOG.md"
+changelog_include = [
+  "benchmark-runner",
+  "libjdxld",
+  "linker-diff",
+  "linker-layout",
+  "linker-trace",
+  "linker-utils",
+]

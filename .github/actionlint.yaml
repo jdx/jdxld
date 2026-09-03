@@ -1,0 +1,4 @@
+self-hosted-runner:
+  labels:
+    - namespace-profile-endev-linux-amd64;overrides.cache-tag=cache
+    - namespace-profile-endev-macos-arm64;overrides.cache-tag=cache
