@@ -380,7 +380,7 @@ impl FileSystem for CachingFileSystem {
     fn open_input(
         &self,
         path: &Path,
-        prepopulate_maps: bool,
+        #[cfg_attr(target_family = "wasm", allow(unused_variables))] prepopulate_maps: bool,
     ) -> Result<(Self::Input, Option<Arc<File>>)> {
         let cache_key = std::path::absolute(path)?;
         let metadata = std::fs::metadata(&cache_key)
