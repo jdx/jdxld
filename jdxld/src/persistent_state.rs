@@ -82,6 +82,12 @@ pub(crate) fn record(
         .map(InputIdentity::from)
         .collect::<Vec<_>>();
     let observation = compare(previous.as_ref(), &identities);
+    if previous
+        .as_ref()
+        .is_some_and(|manifest| manifest.inputs == identities)
+    {
+        return Ok(observation);
+    }
     let manifest = Manifest {
         format_version: FORMAT_VERSION,
         linker_version: linker_version.to_owned(),
@@ -366,5 +372,26 @@ mod tests {
                 removed: 0,
             }
         );
+
+        let unchanged = record(
+            root.path(),
+            Path::new("/workspace"),
+            &second_arguments,
+            "test-version",
+            vec![
+                input("/tmp/rustc-two/symbols.o", 1),
+                input("/stable/one.o", 1),
+                input("/stable/two.o", 2),
+                input("/stable/three.o", 1),
+            ],
+        )
+        .unwrap();
+        assert_eq!(unchanged.previous_generation, Some(2));
+
+        let manifest_path = root
+            .path()
+            .join(hex::encode(digest_parts([OsStr::new("/workspace/output")])))
+            .join(MANIFEST_FILE);
+        assert_eq!(read_manifest(&manifest_path).unwrap().generation, 2);
     }
 }
