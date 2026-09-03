@@ -6,6 +6,9 @@ static MIMALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 #[global_allocator]
 static ALLOC: dhat::Alloc = dhat::Alloc;
 
+#[cfg(unix)]
+mod mbx_worker;
+
 fn main() {
     if let Err(error) = run() {
         libjdxld::error::report_error_and_exit(&error)
@@ -20,6 +23,19 @@ fn run() -> libjdxld::error::Result {
     let _profiler = dhat::Profiler::new_heap();
 
     libjdxld::init_timing()?;
+
+    #[cfg(unix)]
+    if mbx_worker::handle_internal_worker_command()? {
+        return Ok(());
+    }
+
+    #[cfg(unix)]
+    if let Some(socket) = mbx_worker::socket_from_environment() {
+        let args = std::env::args().collect::<Vec<_>>();
+        if mbx_worker::should_use_worker(&args) {
+            return mbx_worker::run_via_worker(&socket, args);
+        }
+    }
 
     let mut args = libjdxld::Args::new(std::env::args)?;
     args.set_version(VERSION);

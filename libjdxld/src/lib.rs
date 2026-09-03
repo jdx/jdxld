@@ -107,6 +107,7 @@ use crate::version_script::VersionScript;
 use colosseum::sync::Arena;
 use crossbeam_utils::atomic::AtomicCell;
 use error::AlreadyInitialised;
+pub use fs::CachingFileSystem;
 pub use fs::FileReplacementMode;
 pub use fs::FileSystem;
 pub use fs::FileType;
@@ -135,10 +136,15 @@ use tracing_subscriber::util::SubscriberInitExt;
 /// Runs the linker in a Rayon thread pool configured from the supplied arguments or the available
 /// jobserver tokens, then cleans up associated resources. Only use this function if you've OK with
 /// waiting for cleanup.
-pub fn run(mut args: Args) -> error::Result {
+pub fn run(args: Args) -> error::Result {
+    run_with_file_system(args, OsFileSystem::new())
+}
+
+/// Runs the linker in a configured thread pool with a caller-provided filesystem.
+pub fn run_with_file_system<F: FileSystem>(mut args: Args, file_system: F) -> error::Result {
     let thread_pool = args.common_mut().build_thread_pool()?;
     thread_pool.pool.install(move || -> error::Result {
-        let linker = Linker::new();
+        let linker = Linker::with_file_system(file_system);
         linker.run(&args)?;
         drop(linker);
         timing::finalise_perfetto_trace()?;
