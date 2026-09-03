@@ -10,3 +10,4 @@ jdxld TRACE: relocation applied flags=NON_INTERPOSABLE | DIRECT | GOT,
 jdxld TRACE: rel_kind=GotRelative,
 R_X86_64_PC32 JmpIndirectToRelative
 ld    target
+

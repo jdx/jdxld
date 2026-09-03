@@ -8,3 +8,4 @@ R_X86_64_GOTPCRELX NoOp
 jdxld TRACE: relocation applied flags=NON_INTERPOSABLE | GOT,
 jdxld TRACE: rel_kind=GotRelative,
 R_X86_64_32 MovIndirectToAbsolute
+

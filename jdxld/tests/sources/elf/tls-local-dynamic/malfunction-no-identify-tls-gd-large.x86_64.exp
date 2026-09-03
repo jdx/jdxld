@@ -13,3 +13,4 @@ jdxld TRACE: relocation applied flags=DYNAMIC | DYNAMIC_FUNCTION | GOT | PLT | H
 jdxld TRACE: rel_kind=PltRelGotBase,
 R_X86_64_TPOFF32 TlsGdToLocalExecLarge
 ld    foo
+
