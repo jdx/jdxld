@@ -11,6 +11,6 @@ _Thread_local int initialized = 1;
 _Thread_local int uninitialized __attribute__((aligned(64)));
 
 void main(void) {
-    uninitialized = 41;
-    exit_syscall(initialized + uninitialized);
+  uninitialized = 41;
+  exit_syscall(initialized + uninitialized);
 }

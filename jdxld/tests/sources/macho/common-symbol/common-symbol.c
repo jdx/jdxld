@@ -8,6 +8,6 @@
 int value __attribute__((common));
 
 void main(void) {
-    value = 42;
-    exit_syscall(value);
+  value = 42;
+  exit_syscall(value);
 }
