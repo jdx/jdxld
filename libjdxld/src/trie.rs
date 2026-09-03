@@ -32,29 +32,63 @@ struct UncompressedNode {
     symbol: Option<usize>,
     representative: usize,
     depth: usize,
-    children: Vec<usize>,
+    first_child: Option<usize>,
+    last_child: Option<usize>,
+    previous_sibling: Option<usize>,
+    next_sibling: Option<usize>,
+    num_children: usize,
 }
 
-/// Build a Mach-O exports trie for `symbols`. `symbols` is sorted in place.
-pub(crate) fn build(symbols: &mut [Symbol<'_>]) -> Vec<u8> {
+#[derive(Debug, Default)]
+pub(crate) struct Topology {
+    nodes: Vec<UncompressedNode>,
+}
+
+#[cfg(test)]
+fn build(symbols: &mut [Symbol<'_>]) -> Vec<u8> {
+    symbols.sort_unstable_by(|a, b| a.name.cmp(b.name));
+    build_sorted(symbols)
+}
+
+/// Build a Mach-O exports trie for symbols that are already sorted by name.
+pub(crate) fn build_sorted(symbols: &[Symbol<'_>]) -> Vec<u8> {
+    let topology = Topology::new(symbols);
+    build_with_topology(symbols, &topology)
+}
+
+pub(crate) fn build_with_topology(symbols: &[Symbol<'_>], topology: &Topology) -> Vec<u8> {
     if symbols.is_empty() {
         return Vec::new();
     }
 
-    symbols.sort_unstable_by(|a, b| a.name.cmp(b.name));
     debug_assert!(
-        symbols.windows(2).all(|w| w[0].name != w[1].name),
-        "duplicate Mach-O export symbol names"
+        symbols.windows(2).all(|w| w[0].name < w[1].name),
+        "Mach-O export symbol names are not sorted or contain duplicates"
     );
 
     let mut builder = Builder {
         symbols,
-        nodes: Vec::with_capacity(symbols.len() + 1),
+        nodes: Vec::with_capacity(topology.nodes.len()),
         edges: Vec::with_capacity(symbols.len()),
     };
-    builder.build_nodes();
+    builder.build_nodes_from_topology(topology);
     builder.layout_until_stable();
     builder.encode()
+}
+
+pub(crate) fn size_with_topology(symbols: &[Symbol<'_>], topology: &Topology) -> usize {
+    if symbols.is_empty() {
+        return 0;
+    }
+
+    let mut builder = Builder {
+        symbols,
+        nodes: Vec::with_capacity(topology.nodes.len()),
+        edges: Vec::with_capacity(symbols.len()),
+    };
+    builder.build_nodes_from_topology(topology);
+    builder.layout_until_stable();
+    builder.encoded_size()
 }
 
 struct Builder<'data, 'symbols> {
@@ -63,48 +97,87 @@ struct Builder<'data, 'symbols> {
     edges: Vec<Edge<'data>>,
 }
 
-impl<'data> Builder<'data, '_> {
-    fn build_nodes(&mut self) {
+impl Topology {
+    pub(crate) fn new(symbols: &[Symbol<'_>]) -> Self {
+        debug_assert!(
+            symbols.windows(2).all(|w| w[0].name < w[1].name),
+            "Mach-O export symbol names are not sorted or contain duplicates"
+        );
+
         let mut uncompressed = vec![UncompressedNode::default()];
         let mut previous_name = &[][..];
         let mut previous_path = vec![0];
 
-        for (symbol_index, symbol) in self.symbols.iter().enumerate() {
+        for (symbol_index, symbol) in symbols.iter().enumerate() {
             let common_prefix = previous_name
                 .iter()
                 .zip(symbol.name)
                 .take_while(|(a, b)| a == b)
                 .count();
 
-            previous_path.truncate(common_prefix + 1);
-            let mut parent = *previous_path.last().unwrap();
-
-            for depth in common_prefix + 1..=symbol.name.len() {
-                let child = uncompressed.len();
-
-                uncompressed.push(UncompressedNode {
-                    representative: symbol_index,
-                    depth,
-                    ..Default::default()
-                });
-
-                uncompressed[parent].children.push(child);
-                previous_path.push(child);
-                parent = child;
+            while uncompressed[*previous_path.last().unwrap()].depth > common_prefix {
+                previous_path.pop();
             }
 
-            uncompressed[parent].symbol.replace(symbol_index);
+            let mut parent = *previous_path.last().unwrap();
+            if uncompressed[parent].depth < common_prefix {
+                let previous_child = uncompressed[parent]
+                    .last_child
+                    .expect("previous symbol path is missing");
+                let previous_sibling = uncompressed[previous_child].previous_sibling;
+                let branch = uncompressed.len();
+                uncompressed.push(UncompressedNode {
+                    representative: symbol_index - 1,
+                    depth: common_prefix,
+                    first_child: Some(previous_child),
+                    last_child: Some(previous_child),
+                    previous_sibling,
+                    num_children: 1,
+                    ..Default::default()
+                });
+                uncompressed[previous_child].previous_sibling = None;
+                if let Some(previous_sibling) = previous_sibling {
+                    uncompressed[previous_sibling].next_sibling = Some(branch);
+                } else {
+                    uncompressed[parent].first_child = Some(branch);
+                }
+                uncompressed[parent].last_child = Some(branch);
+                previous_path.push(branch);
+                parent = branch;
+            }
+
+            if uncompressed[parent].depth == symbol.name.len() {
+                uncompressed[parent].symbol = Some(symbol_index);
+            } else {
+                let child = uncompressed.len();
+                uncompressed.push(UncompressedNode {
+                    symbol: Some(symbol_index),
+                    representative: symbol_index,
+                    depth: symbol.name.len(),
+                    ..Default::default()
+                });
+                append_child(&mut uncompressed, parent, child);
+                previous_path.push(child);
+            }
             previous_name = symbol.name;
         }
 
-        let mut pending: Vec<(usize, Option<usize>)> = vec![(0, None)];
-        while let Some((uncompressed_index, parent_edge)) = pending.pop() {
-            let source = &uncompressed[uncompressed_index];
-            let node_index = self.nodes.len();
-            if let Some(edge_index) = parent_edge {
-                self.edges[edge_index].child = node_index;
-            }
+        Topology {
+            nodes: uncompressed,
+        }
+    }
+}
 
+impl<'data> Builder<'data, '_> {
+    #[cfg(test)]
+    fn build_nodes(&mut self) {
+        let topology = Topology::new(self.symbols);
+        self.build_nodes_from_topology(&topology);
+    }
+
+    fn build_nodes_from_topology(&mut self, topology: &Topology) {
+        let uncompressed = &topology.nodes;
+        for source in uncompressed {
             let (address, flags) = source
                 .symbol
                 .map_or((None, macho::ExportSymbolFlags(0)), |i| {
@@ -113,7 +186,7 @@ impl<'data> Builder<'data, '_> {
 
             let first_edge = self.edges.len();
             debug_assert!(
-                u8::try_from(source.children.len()).is_ok(),
+                u8::try_from(source.num_children).is_ok(),
                 "Mach-O exports trie node has too many children"
             );
 
@@ -121,38 +194,21 @@ impl<'data> Builder<'data, '_> {
                 address,
                 flags,
                 first_edge,
-                num_edges: source.children.len(),
+                num_edges: source.num_children,
                 ..Default::default()
             });
 
-            for &first_child in &source.children {
-                let mut child = first_child;
-
-                while uncompressed[child].symbol.is_none()
-                    && uncompressed[child].children.len() == 1
-                {
-                    child = uncompressed[child].children[0];
-                }
-
-                let child_node = &uncompressed[child];
+            let mut child = source.first_child;
+            while let Some(child_index) = child {
+                let child_node = &uncompressed[child_index];
 
                 self.edges.push(Edge {
                     label: &self.symbols[child_node.representative].name
                         [source.depth..child_node.depth],
-                    child: usize::MAX,
+                    child: child_index,
                     child_offset_size: 1,
                 });
-            }
-            for (edge_offset, &first_child) in source.children.iter().enumerate().rev() {
-                let mut child = first_child;
-
-                while uncompressed[child].symbol.is_none()
-                    && uncompressed[child].children.len() == 1
-                {
-                    child = uncompressed[child].children[0];
-                }
-
-                pending.push((child, Some(first_edge + edge_offset)));
+                child = child_node.next_sibling;
             }
         }
     }
@@ -198,7 +254,7 @@ impl<'data> Builder<'data, '_> {
     }
 
     fn encode(&self) -> Vec<u8> {
-        let total_size = self.nodes.last().map_or(0, |node| node.offset + node.size);
+        let total_size = self.encoded_size();
         let mut out = Vec::with_capacity(total_size);
 
         for (node_index, node) in self.nodes.iter().enumerate() {
@@ -224,10 +280,26 @@ impl<'data> Builder<'data, '_> {
         out
     }
 
+    fn encoded_size(&self) -> usize {
+        self.nodes.last().map_or(0, |node| node.offset + node.size)
+    }
+
     fn node_edges(&self, node_index: usize) -> impl Iterator<Item = &Edge<'data>> {
         let node = &self.nodes[node_index];
         self.edges[node.first_edge..node.first_edge + node.num_edges].iter()
     }
+}
+
+fn append_child(nodes: &mut [UncompressedNode], parent: usize, child: usize) {
+    let previous_sibling = nodes[parent].last_child;
+    nodes[child].previous_sibling = previous_sibling;
+    if let Some(previous_sibling) = previous_sibling {
+        nodes[previous_sibling].next_sibling = Some(child);
+    } else {
+        nodes[parent].first_child = Some(child);
+    }
+    nodes[parent].last_child = Some(child);
+    nodes[parent].num_children += 1;
 }
 
 fn regular_export_size(flags: macho::ExportSymbolFlags, address: u64) -> usize {
@@ -260,6 +332,7 @@ mod tests {
 
     fn check(symbols: &mut [Symbol]) {
         let trie = build(symbols);
+        assert_eq!(trie, build_sorted(symbols));
 
         assert_eq!(
             parse_exports(&trie),
@@ -375,6 +448,14 @@ mod tests {
             .collect_vec();
 
         check(&mut symbols);
+
+        let mut builder = Builder {
+            symbols: &symbols,
+            nodes: Vec::new(),
+            edges: Vec::new(),
+        };
+        builder.build_nodes();
+        assert_eq!(builder.nodes.len(), symbols.len() + 1);
     }
 
     #[test]
@@ -418,6 +499,13 @@ mod tests {
             })
             .collect_vec();
 
-        assert!(build(&mut actual).len() <= build(&mut maximum).len());
+        let maximum_trie = build(&mut maximum);
+        let topology = Topology::new(&maximum);
+        assert_eq!(size_with_topology(&maximum, &topology), maximum_trie.len());
+        actual.sort_unstable_by(|a, b| a.name.cmp(b.name));
+        let actual_trie = build_with_topology(&actual, &topology);
+
+        assert_eq!(actual_trie, build_sorted(&actual));
+        assert!(actual_trie.len() <= maximum_trie.len());
     }
 }

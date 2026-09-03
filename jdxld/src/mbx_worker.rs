@@ -11,13 +11,13 @@ use std::io::Read as _;
 use std::io::Write as _;
 use std::os::unix::ffi::OsStringExt as _;
 use std::os::unix::fs::PermissionsExt as _;
+use std::os::unix::io::AsRawFd as _;
 use std::os::unix::net::UnixListener;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::time::Duration;
 
 const WORKER_ARG: &str = "--mbx-worker";
 const SOCKET_ENV: &str = "MBX_JDXLD_SOCKET";
@@ -106,17 +106,36 @@ fn serve(socket: &Path, parent_pid: u32, state_root: Option<&Path>) -> Result {
     let file_system = CachingFileSystem::new();
 
     loop {
+        let mut poll_fd = libc::pollfd {
+            fd: listener.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: `poll_fd` points to one initialized descriptor for the duration of the call.
+        let poll_result = unsafe { libc::poll(&mut poll_fd, 1, 10) };
+        if poll_result < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(error.into());
+        }
+        if poll_result == 0 {
+            if unsafe { libc::getppid() } as u32 != parent_pid {
+                return Ok(());
+            }
+            continue;
+        }
+
         match listener.accept() {
             Ok((mut stream, _)) => {
+                // Accepted sockets inherit nonblocking mode on macOS. Requests may still be in
+                // flight when poll wakes us, so switch the connected stream back to blocking IO.
+                stream.set_nonblocking(false)?;
                 handle_request(&mut stream, &file_system, state_root);
                 file_system.prune();
             }
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                if unsafe { libc::getppid() } as u32 != parent_pid {
-                    return Ok(());
-                }
-                std::thread::sleep(Duration::from_millis(10));
-            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
             Err(error) => return Err(error.into()),
         }
     }

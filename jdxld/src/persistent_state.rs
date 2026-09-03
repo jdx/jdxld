@@ -82,6 +82,12 @@ pub(crate) fn record(
         .map(InputIdentity::from)
         .collect::<Vec<_>>();
     let observation = compare(previous.as_ref(), &identities);
+    if previous
+        .as_ref()
+        .is_some_and(|manifest| manifest.inputs == identities)
+    {
+        return Ok(observation);
+    }
     let manifest = Manifest {
         format_version: FORMAT_VERSION,
         linker_version: linker_version.to_owned(),
@@ -123,13 +129,21 @@ fn structure_digest(cwd: &Path, arguments: &[String], input_paths: &BTreeSet<&Pa
             .is_some_and(|path| is_rustc_temporary_path(Path::new(path)))
         {
             hash_part(&mut hasher, OsStr::new("<rustc-temporary-search-path>"));
-        } else if input_paths.contains(absolute_path(cwd, Path::new(argument)).as_path()) {
+        } else if is_input_path(cwd, Path::new(argument), input_paths) {
             // Input membership is the changing part described by the manifest, not link structure.
         } else {
             hash_part(&mut hasher, OsStr::new(argument));
         }
     }
     *hasher.finalize().as_bytes()
+}
+
+fn is_input_path(cwd: &Path, path: &Path, input_paths: &BTreeSet<&Path>) -> bool {
+    if path.is_absolute() {
+        input_paths.contains(path)
+    } else {
+        input_paths.contains(cwd.join(path).as_path())
+    }
 }
 
 fn is_rustc_temporary_path(path: &Path) -> bool {
@@ -226,6 +240,26 @@ fn compare(previous: Option<&Manifest>, current: &[InputIdentity]) -> StateObser
             ..StateObservation::default()
         };
     };
+    if previous.inputs.len() == current.len()
+        && previous
+            .inputs
+            .iter()
+            .zip(current)
+            .all(|(old, new)| old.path == new.path)
+    {
+        let unchanged = previous
+            .inputs
+            .iter()
+            .zip(current)
+            .filter(|(old, new)| same_contents(old, new))
+            .count();
+        return StateObservation {
+            previous_generation: Some(previous.generation),
+            unchanged,
+            changed: current.len() - unchanged,
+            ..StateObservation::default()
+        };
+    }
     let old = previous
         .inputs
         .iter()
@@ -366,5 +400,51 @@ mod tests {
                 removed: 0,
             }
         );
+
+        let unchanged = record(
+            root.path(),
+            Path::new("/workspace"),
+            &second_arguments,
+            "test-version",
+            vec![
+                input("/tmp/rustc-two/symbols.o", 1),
+                input("/stable/one.o", 1),
+                input("/stable/two.o", 2),
+                input("/stable/three.o", 1),
+            ],
+        )
+        .unwrap();
+        assert_eq!(unchanged.previous_generation, Some(2));
+
+        let manifest_path = root
+            .path()
+            .join(hex::encode(digest_parts([OsStr::new("/workspace/output")])))
+            .join(MANIFEST_FILE);
+        assert_eq!(read_manifest(&manifest_path).unwrap().generation, 2);
+
+        let changed_in_place = record(
+            root.path(),
+            Path::new("/workspace"),
+            &second_arguments,
+            "test-version",
+            vec![
+                input("/tmp/rustc-two/symbols.o", 1),
+                input("/stable/one.o", 1),
+                input("/stable/two.o", 3),
+                input("/stable/three.o", 1),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            changed_in_place,
+            StateObservation {
+                previous_generation: Some(2),
+                unchanged: 3,
+                changed: 1,
+                added: 0,
+                removed: 0,
+            }
+        );
+        assert_eq!(read_manifest(&manifest_path).unwrap().generation, 3);
     }
 }
