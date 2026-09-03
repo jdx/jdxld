@@ -76,24 +76,41 @@ impl<'data> Builder<'data, '_> {
                 .take_while(|(a, b)| a == b)
                 .count();
 
-            previous_path.truncate(common_prefix + 1);
-            let mut parent = *previous_path.last().unwrap();
-
-            for depth in common_prefix + 1..=symbol.name.len() {
-                let child = uncompressed.len();
-
-                uncompressed.push(UncompressedNode {
-                    representative: symbol_index,
-                    depth,
-                    ..Default::default()
-                });
-
-                uncompressed[parent].children.push(child);
-                previous_path.push(child);
-                parent = child;
+            while uncompressed[*previous_path.last().unwrap()].depth > common_prefix {
+                previous_path.pop();
             }
 
-            uncompressed[parent].symbol.replace(symbol_index);
+            let mut parent = *previous_path.last().unwrap();
+            if uncompressed[parent].depth < common_prefix {
+                let previous_child = uncompressed[parent]
+                    .children
+                    .pop()
+                    .expect("previous symbol path is missing");
+                let branch = uncompressed.len();
+                uncompressed.push(UncompressedNode {
+                    representative: symbol_index - 1,
+                    depth: common_prefix,
+                    children: vec![previous_child],
+                    ..Default::default()
+                });
+                uncompressed[parent].children.push(branch);
+                previous_path.push(branch);
+                parent = branch;
+            }
+
+            if uncompressed[parent].depth == symbol.name.len() {
+                uncompressed[parent].symbol = Some(symbol_index);
+            } else {
+                let child = uncompressed.len();
+                uncompressed.push(UncompressedNode {
+                    symbol: Some(symbol_index),
+                    representative: symbol_index,
+                    depth: symbol.name.len(),
+                    ..Default::default()
+                });
+                uncompressed[parent].children.push(child);
+                previous_path.push(child);
+            }
             previous_name = symbol.name;
         }
 
@@ -125,15 +142,7 @@ impl<'data> Builder<'data, '_> {
                 ..Default::default()
             });
 
-            for &first_child in &source.children {
-                let mut child = first_child;
-
-                while uncompressed[child].symbol.is_none()
-                    && uncompressed[child].children.len() == 1
-                {
-                    child = uncompressed[child].children[0];
-                }
-
+            for &child in &source.children {
                 let child_node = &uncompressed[child];
 
                 self.edges.push(Edge {
@@ -143,15 +152,7 @@ impl<'data> Builder<'data, '_> {
                     child_offset_size: 1,
                 });
             }
-            for (edge_offset, &first_child) in source.children.iter().enumerate().rev() {
-                let mut child = first_child;
-
-                while uncompressed[child].symbol.is_none()
-                    && uncompressed[child].children.len() == 1
-                {
-                    child = uncompressed[child].children[0];
-                }
-
+            for (edge_offset, &child) in source.children.iter().enumerate().rev() {
                 pending.push((child, Some(first_edge + edge_offset)));
             }
         }
@@ -375,6 +376,14 @@ mod tests {
             .collect_vec();
 
         check(&mut symbols);
+
+        let mut builder = Builder {
+            symbols: &symbols,
+            nodes: Vec::new(),
+            edges: Vec::new(),
+        };
+        builder.build_nodes();
+        assert_eq!(builder.nodes.len(), symbols.len() + 1);
     }
 
     #[test]
