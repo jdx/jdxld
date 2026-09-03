@@ -32,7 +32,11 @@ struct UncompressedNode {
     symbol: Option<usize>,
     representative: usize,
     depth: usize,
-    children: Vec<usize>,
+    first_child: Option<usize>,
+    last_child: Option<usize>,
+    previous_sibling: Option<usize>,
+    next_sibling: Option<usize>,
+    num_children: usize,
 }
 
 #[cfg(test)]
@@ -88,17 +92,26 @@ impl<'data> Builder<'data, '_> {
             let mut parent = *previous_path.last().unwrap();
             if uncompressed[parent].depth < common_prefix {
                 let previous_child = uncompressed[parent]
-                    .children
-                    .pop()
+                    .last_child
                     .expect("previous symbol path is missing");
+                let previous_sibling = uncompressed[previous_child].previous_sibling;
                 let branch = uncompressed.len();
                 uncompressed.push(UncompressedNode {
                     representative: symbol_index - 1,
                     depth: common_prefix,
-                    children: vec![previous_child],
+                    first_child: Some(previous_child),
+                    last_child: Some(previous_child),
+                    previous_sibling,
+                    num_children: 1,
                     ..Default::default()
                 });
-                uncompressed[parent].children.push(branch);
+                uncompressed[previous_child].previous_sibling = None;
+                if let Some(previous_sibling) = previous_sibling {
+                    uncompressed[previous_sibling].next_sibling = Some(branch);
+                } else {
+                    uncompressed[parent].first_child = Some(branch);
+                }
+                uncompressed[parent].last_child = Some(branch);
                 previous_path.push(branch);
                 parent = branch;
             }
@@ -113,20 +126,13 @@ impl<'data> Builder<'data, '_> {
                     depth: symbol.name.len(),
                     ..Default::default()
                 });
-                uncompressed[parent].children.push(child);
+                append_child(&mut uncompressed, parent, child);
                 previous_path.push(child);
             }
             previous_name = symbol.name;
         }
 
-        let mut pending: Vec<(usize, Option<usize>)> = vec![(0, None)];
-        while let Some((uncompressed_index, parent_edge)) = pending.pop() {
-            let source = &uncompressed[uncompressed_index];
-            let node_index = self.nodes.len();
-            if let Some(edge_index) = parent_edge {
-                self.edges[edge_index].child = node_index;
-            }
-
+        for source in &uncompressed {
             let (address, flags) = source
                 .symbol
                 .map_or((None, macho::ExportSymbolFlags(0)), |i| {
@@ -135,7 +141,7 @@ impl<'data> Builder<'data, '_> {
 
             let first_edge = self.edges.len();
             debug_assert!(
-                u8::try_from(source.children.len()).is_ok(),
+                u8::try_from(source.num_children).is_ok(),
                 "Mach-O exports trie node has too many children"
             );
 
@@ -143,22 +149,21 @@ impl<'data> Builder<'data, '_> {
                 address,
                 flags,
                 first_edge,
-                num_edges: source.children.len(),
+                num_edges: source.num_children,
                 ..Default::default()
             });
 
-            for &child in &source.children {
-                let child_node = &uncompressed[child];
+            let mut child = source.first_child;
+            while let Some(child_index) = child {
+                let child_node = &uncompressed[child_index];
 
                 self.edges.push(Edge {
                     label: &self.symbols[child_node.representative].name
                         [source.depth..child_node.depth],
-                    child: usize::MAX,
+                    child: child_index,
                     child_offset_size: 1,
                 });
-            }
-            for (edge_offset, &child) in source.children.iter().enumerate().rev() {
-                pending.push((child, Some(first_edge + edge_offset)));
+                child = child_node.next_sibling;
             }
         }
     }
@@ -234,6 +239,18 @@ impl<'data> Builder<'data, '_> {
         let node = &self.nodes[node_index];
         self.edges[node.first_edge..node.first_edge + node.num_edges].iter()
     }
+}
+
+fn append_child(nodes: &mut [UncompressedNode], parent: usize, child: usize) {
+    let previous_sibling = nodes[parent].last_child;
+    nodes[child].previous_sibling = previous_sibling;
+    if let Some(previous_sibling) = previous_sibling {
+        nodes[previous_sibling].next_sibling = Some(child);
+    } else {
+        nodes[parent].first_child = Some(child);
+    }
+    nodes[parent].last_child = Some(child);
+    nodes[parent].num_children += 1;
 }
 
 fn regular_export_size(flags: macho::ExportSymbolFlags, address: u64) -> usize {
