@@ -1,29 +1,41 @@
 # Releasing jdxld
 
-* Manually trigger the release workflow to verify that it still works.
-* Run `git cliff {previous version}...`
-* Copy output into `CHANGELOG.md` and edit as necessary.
-* The header for the release must be just the version number that is going to be released.
-  * If in doubt, run the awk command from `release.yml`
-* Change version in workspace `Cargo.toml`
-* Search for `version = "{old version}"` for other places to update.
-* Ensure that the above changes are merged into the main repository.
-* Sync local repo to upstream `main`. i.e. no uncommitted changes.
-* Run `cargo publish` for each package.
-* Trigger the github release action by pushing a tag for the version number.
+Releases use release-plz. Do not edit versions, changelogs, or tags by hand.
 
-```shell
-git tag 0.6.0 # Where "0.6.0" is the number in Cargo.toml 
-git push origin refs/tags/0.6.0
-```
+## Release flow
 
-That should trigger the `release.yml` workflow in GitHub. You can follow its progress in the
-[Actions tab](https://github.com/jdx/jdxld/actions) in GitHub.
+1. Changes merged to `main` cause `release-plz.yml` to open or update a release PR.
+2. The release PR bumps the shared workspace version and updates `CHANGELOG.md`.
+3. Merging that PR creates `v{version}` and a draft GitHub release. The workspace is in
+   release-plz git-only mode, so no crates are published to crates.io.
+4. `release.yml` builds `jdxld-aarch64-apple-darwin.tar.gz` from the tag with only the Mach-O
+   feature enabled, signs and notarizes the binary, and attaches the archive and `SHA256SUMS`.
+5. The release-plz workflow publishes the draft only after the asset workflow succeeds.
 
-When complete, it should create the release in [Releases](https://github.com/jdx/jdxld/releases).
+Asset names do not contain the version, which keeps the
+`releases/latest/download/jdxld-aarch64-apple-darwin.tar.gz` URL stable for mr-boxington.
 
-Maintainers can then edit the release notes associated with the release.
+## Repository setup
 
-If everything looks good, publish the release.
+Configure these Actions secrets before merging the first release PR:
 
-Update release integrations once jdxld publishes supported packages.
+- `RELEASE_PLZ_TOKEN`: a PAT with contents and pull-request write access. The default token cannot
+  trigger CI for the generated release PR.
+- `CERTIFICATES_P12` and `CERTIFICATES_P12_PASS`: the base64-encoded Developer ID Application
+  certificate used by the other jdx.dev CLI releases and its password.
+- `APPLE_API_KEY_P8`, `APPLE_API_KEY_ID`, and `APPLE_API_ISSUER_ID`: the base64-encoded App Store
+  Connect team API key and identifiers used by `notarytool`.
+
+Enable immutable releases in the repository settings before the first public release. The
+workflow keeps the release drafted while assets are replaceable and publishes it only when the
+archive is complete.
+
+## Testing and recovery
+
+Run the `release` workflow manually with `dry_run` enabled and `ref` set to a branch or commit. It
+builds and smoke-tests the production archive, then retains the archive and checksums as workflow
+artifacts without using signing secrets or changing a GitHub release.
+
+If an automated release fails after creating its tag, fix the workflow and manually run `release`
+with that tag and `dry_run` disabled. The workflow recreates a missing draft, replaces assets only
+while the release is still a draft, and publishes it after a successful upload.
