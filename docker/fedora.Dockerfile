@@ -3,7 +3,7 @@
 # docker build --progress=plain -t jdxld-dev-fedora . -f docker/fedora.Dockerfile
 # docker run -it jdxld-dev-fedora
 
-FROM fedora:44 AS chef
+FROM fedora:46@sha256:a9bab18d01cf2c2cf62f3e79c72623405bce14ac062995cc6651a3073c802e41 AS chef
 RUN dnf -y update && \
     dnf -y install \
         clang \
