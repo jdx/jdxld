@@ -64,7 +64,7 @@ jobs:
 
   external-tests:
     name: Test Linux (external tests)
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     container:
       image: "ghcr.io/wild-linker/wild/ci-ubuntu-cross-amd64:sha-fc8fa6975269300dacfc3c8fff06b3ba2f96721b"
@@ -83,7 +83,7 @@ jobs:
 
   linux-cross-build:
     name: Build Linux (${{ matrix.arch }})
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     strategy:
       fail-fast: false
@@ -114,7 +114,7 @@ jobs:
 
   wasip1-build:
     name: Build wasip1
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     container:
       image: ghcr.io/wild-linker/wild/ci-ubuntu-wasm-amd64:sha-fc8fa6975269300dacfc3c8fff06b3ba2f96721b
@@ -139,7 +139,7 @@ jobs:
 
   wasm-test:
     name: Test Wasm
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     container:
       image: ghcr.io/wild-linker/wild/ci-ubuntu-wasm-amd64:sha-fc8fa6975269300dacfc3c8fff06b3ba2f96721b
@@ -195,7 +195,7 @@ jobs:
       - run: cargo build --profile ci --workspace --no-default-features
 
   minimal-versions:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     container:
       image: ghcr.io/wild-linker/wild/ci-ubuntu-amd64:sha-fc8fa6975269300dacfc3c8fff06b3ba2f96721b
@@ -213,7 +213,7 @@ jobs:
 
   clippy:
     name: Clippy
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -232,7 +232,7 @@ jobs:
 
   cargo-deny:
     name: Cargo deny
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -244,7 +244,7 @@ jobs:
 
   rustfmt:
     name: Check formatting
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -257,7 +257,7 @@ jobs:
 
   yamlfmt:
     name: yamlfmt
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -273,7 +273,7 @@ jobs:
 
   spelling:
     name: Spell Check with Typos
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -284,7 +284,7 @@ jobs:
 
   calc-matrix:
     name: Find Nix checks
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     outputs:
       matrix: ${{ steps.calc-matrix.outputs.matrix }}
@@ -316,7 +316,7 @@ jobs:
       fail-fast: false
       matrix:
         check: ${{ fromJson(needs.calc-matrix.outputs.matrix) }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     name: Nix/${{ matrix.check }}
 
