@@ -4,7 +4,7 @@
 #
 # docker run -it jdxld-dev-nix
 
-FROM nixos/nix AS chef
+FROM nixos/nix@sha256:f159a58f390677f41e8e900a74b6e2f9c7f27b364122ae6acf7a652ce6c551c0 AS chef
 
 COPY docker/shell.nix shell.nix
 RUN nix-shell --run "rustup toolchain install nightly"
