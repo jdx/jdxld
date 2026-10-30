@@ -3,7 +3,7 @@
 # docker build --progress=plain -t jdxld-dev-debian . -f docker/debian.Dockerfile
 # docker run -it jdxld-dev-debian
 
-FROM rust:1.97.1 AS chef
+FROM rust:1.99.0@sha256:81015672d6939b0265f09adf96d5de125482bb1330106076956b0518e74edc90 AS chef
 RUN apt-get update && \
     apt-get install -y \
         clang \

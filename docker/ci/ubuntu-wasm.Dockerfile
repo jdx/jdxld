@@ -1,4 +1,4 @@
-ARG BASE_IMAGE=ghcr.io/wild-linker/wild/ci-ubuntu-base-amd64:latest
+ARG BASE_IMAGE=ghcr.io/wild-linker/wild/ci-ubuntu-base-amd64:latest@sha256:9ef64a4a344f1192edf808016cc78022662845d081a6bcc9902fe3d5493ab488
 FROM ${BASE_IMAGE}
 
 RUN eatmydata apt-get update \
