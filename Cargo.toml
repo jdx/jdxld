@@ -104,7 +104,7 @@ object = { version = "0.40.0", default-features = false, features = [
 os_info = { version = "3.1.0", default-features = false }
 paste = { version = "1.0.15", default-features = false }
 # 0.4.9 contains breaking changes.
-perf-event = { version = "=0.4.8", default-features = false }
+perf-event = { version = "=0.4.9", default-features = false }
 perfetto-recorder = { version = "0.3.0", default-features = false }
 postcard = { version = "1.1.1", default-features = false, features = [
   "use-std",
@@ -127,7 +127,7 @@ symbolic-demangle = { version = "13.0.0", default-features = false, features = [
   "cpp",
   "rust",
 ] }
-tabled = { version = "0.21.0", default-features = false, features = ["std"] }
+tabled = { version = "0.22.0", default-features = false, features = ["std"] }
 tempfile = { version = "3.15.0", default-features = false, features = [
   "getrandom",
 ] }
@@ -145,11 +145,11 @@ tracing-subscriber = { version = "0.3.16", default-features = false, features = 
 ] }
 uuid = { version = "1.3.0", default-features = false, features = ["v4"] }
 wait-timeout = { version = "0.2.0", default-features = false }
-wait4 = { version = "0.1.3", default-features = false }
-wasmparser = { version = "0.258.0", default-features = false, features = [
+wait4 = { version = "0.2.0", default-features = false }
+wasmparser = { version = "0.262.0", default-features = false, features = [
   "hash-collections",
 ] }
-wasm-encoder = { version = "0.258.0", default-features = false }
+wasm-encoder = { version = "0.262.0", default-features = false }
 which = { version = "8.0.0", default-features = false, features = ["real-sys"] }
 winnow = { version = "1.0.0", default-features = false, features = [
   "ascii",
@@ -159,7 +159,7 @@ winnow = { version = "1.0.0", default-features = false, features = [
 zerocopy = { version = "0.8.27", default-features = false, features = [
   "derive",
 ] }
-zstd = { version = "0.13.0", default-features = false }
+zstd = { version = "0.14.0", default-features = false }
 
 [profile.release]
 codegen-units = 1
